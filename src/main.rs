@@ -590,10 +590,15 @@ impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for AppState
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if font_renderer::maybe_run_builder_mode(&args)? {
+        return Ok(());
+    }
+
     println!("Starting leanbar...");
 
     let font_path = "/usr/share/fonts/TTF/SauceCodeProNerdFont-Regular.ttf";
-    let glyph_cache = font_renderer::GlyphCache::new(font_path, 16.0).ok();
+    let glyph_cache = font_renderer::GlyphCache::load_or_build(font_path, 16.0).ok();
 
     if glyph_cache.is_none() {
         eprintln!("Failed to load font. Make sure the path is correct.");
