@@ -83,6 +83,53 @@ struct AppState {
 }
 
 impl AppState {
+    fn date_content_width(&self, glyphs: &font_renderer::GlyphCache, day: u8, month: u8, year: u8) -> usize {
+        glyphs.calendar_icon.width
+            + 6
+            + glyphs.numbers[(day / 10) as usize].width
+            + 1
+            + glyphs.numbers[(day % 10) as usize].width
+            + 1
+            + glyphs.slash.width
+            + 1
+            + glyphs.numbers[(month / 10) as usize].width
+            + 1
+            + glyphs.numbers[(month % 10) as usize].width
+            + 1
+            + glyphs.slash.width
+            + 1
+            + glyphs.numbers[(year / 10) as usize].width
+            + 1
+            + glyphs.numbers[(year % 10) as usize].width
+    }
+
+    fn time_content_width(&self, glyphs: &font_renderer::GlyphCache, h: u8, m: u8) -> usize {
+        let display_h = if h == 0 {
+            12
+        } else if h > 12 {
+            h - 12
+        } else {
+            h
+        };
+        let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
+
+        glyphs.time_icon.width
+            + 6
+            + glyphs.numbers[(display_h / 10) as usize].width
+            + 1
+            + glyphs.numbers[(display_h % 10) as usize].width
+            + 1
+            + glyphs.colon.width
+            + 1
+            + glyphs.numbers[(m / 10) as usize].width
+            + 1
+            + glyphs.numbers[(m % 10) as usize].width
+            + 1
+            + glyphs.space.width
+            + 1
+            + am_pm.width
+    }
+
     fn draw_bar(&mut self) -> Vec<(i32, i32, i32, i32)> {
         let mut damage = Vec::new();
 
@@ -94,11 +141,9 @@ impl AppState {
         let slice = unsafe { std::slice::from_raw_parts_mut(self.pixels, len) };
         let stride = (self.width * 4) as usize;
 
-        // Fetch current workspace state
         let active_ws = ACTIVE_WORKSPACE.load(Ordering::Acquire);
         let mut current_ws = [false; 10];
         let mut ws_changed = self.force_full_redraw || active_ws != self.last_active_ws;
-
         for (i, ws) in WORKSPACES.iter().enumerate() {
             current_ws[i] = ws.load(Ordering::Acquire);
             if current_ws[i] != self.last_workspaces[i] {
@@ -106,21 +151,17 @@ impl AppState {
             }
         }
 
-        // Fetch current time state
         let h = TIME_HOURS.load(Ordering::Acquire);
         let m = TIME_MINUTES.load(Ordering::Acquire);
         let day = DATE_DAY.load(Ordering::Acquire);
         let month = DATE_MONTH.load(Ordering::Acquire);
         let year = DATE_YEAR.load(Ordering::Acquire);
 
-        let time_changed = self.force_full_redraw
-            || h != self.last_h
-            || m != self.last_m
-            || day != self.last_day
-            || month != self.last_month
-            || year != self.last_year;
+        let clock_changed = self.force_full_redraw || h != self.last_h || m != self.last_m;
+        let date_changed =
+            self.force_full_redraw || day != self.last_day || month != self.last_month || year != self.last_year;
 
-        if !ws_changed && !time_changed {
+        if !ws_changed && !clock_changed && !date_changed {
             return damage;
         }
 
@@ -130,8 +171,22 @@ impl AppState {
             let color_ws_other = [0xf7, 0xa6, 0xcb, 0xff];
             let color_date = [0xec, 0xc7, 0x74, 0xff];
 
+            let max_digit_width = glyphs.numbers.iter().map(|g| g.width).max().unwrap_or(0);
+            let max_ampm_width = glyphs.am.width.max(glyphs.pm.width);
+            let date_slot_width = glyphs.calendar_icon.width + (max_digit_width * 6) + (glyphs.slash.width * 2) + 13;
+            let time_slot_width = glyphs.time_icon.width
+                + (max_digit_width * 4)
+                + glyphs.colon.width
+                + glyphs.space.width
+                + max_ampm_width
+                + 12;
+            let center_gap = 24usize;
+            let center_total_width = date_slot_width + center_gap + time_slot_width;
+            let center_start = (self.width as usize).saturating_sub(center_total_width) / 2;
+            let date_slot_x = center_start;
+            let time_slot_x = center_start + date_slot_width + center_gap;
+
             if ws_changed {
-                // Clear left side (approx 600px wide is enough for 10 workspaces)
                 let ws_area_width = 600.min(self.width as usize);
                 for y in 0..self.height as usize {
                     let start = y * stride;
@@ -151,37 +206,15 @@ impl AppState {
 
                         if ws_num == 10 {
                             let y_offset1 = (28usize.saturating_sub(glyphs.numbers[1].height)) / 2;
-                            self.draw_glyph(
-                                slice,
-                                stride,
-                                current_x,
-                                y_offset1,
-                                color,
-                                &glyphs.numbers[1],
-                            );
+                            self.draw_glyph(slice, stride, current_x, y_offset1, color, &glyphs.numbers[1]);
                             current_x += glyphs.numbers[1].width + 1;
 
                             let y_offset0 = (28usize.saturating_sub(glyphs.numbers[0].height)) / 2;
-                            self.draw_glyph(
-                                slice,
-                                stride,
-                                current_x,
-                                y_offset0,
-                                color,
-                                &glyphs.numbers[0],
-                            );
+                            self.draw_glyph(slice, stride, current_x, y_offset0, color, &glyphs.numbers[0]);
                             current_x += glyphs.numbers[0].width + 10;
                         } else {
-                            let y_offset =
-                                (28usize.saturating_sub(glyphs.numbers[ws_num].height)) / 2;
-                            self.draw_glyph(
-                                slice,
-                                stride,
-                                current_x,
-                                y_offset,
-                                color,
-                                &glyphs.numbers[ws_num],
-                            );
+                            let y_offset = (28usize.saturating_sub(glyphs.numbers[ws_num].height)) / 2;
+                            self.draw_glyph(slice, stride, current_x, y_offset, color, &glyphs.numbers[ws_num]);
                             current_x += glyphs.numbers[ws_num].width + 10;
                         }
                     }
@@ -192,62 +225,22 @@ impl AppState {
                 self.last_workspaces = current_ws;
             }
 
-            if time_changed {
-                let date_str_width = glyphs.calendar_icon.width
-                    + 6
-                    + glyphs.numbers[(day / 10) as usize].width
-                    + 1
-                    + glyphs.numbers[(day % 10) as usize].width
-                    + 1
-                    + glyphs.slash.width
-                    + 1
-                    + glyphs.numbers[(month / 10) as usize].width
-                    + 1
-                    + glyphs.numbers[(month % 10) as usize].width
-                    + 1
-                    + glyphs.slash.width
-                    + 1
-                    + glyphs.numbers[(year / 10) as usize].width
-                    + 1
-                    + glyphs.numbers[(year % 10) as usize].width
-                    + 18;
-
-                let time_str_width = glyphs.time_icon.width
-                    + 6
-                    + glyphs.numbers[(h / 10) as usize].width
-                    + 1
-                    + glyphs.numbers[(h % 10) as usize].width
-                    + 1
-                    + glyphs.colon.width
-                    + 1
-                    + glyphs.numbers[(m / 10) as usize].width
-                    + 1
-                    + glyphs.numbers[(m % 10) as usize].width
-                    + 1
-                    + glyphs.space.width
-                    + 1
-                    + glyphs.am.width;
-
-                let total_center_width = date_str_width + time_str_width;
-                let mut center_x = (self.width as usize / 2).saturating_sub(total_center_width / 2);
-
-                // Clear center block
-                let clear_start_x = center_x.saturating_sub(10);
-                let clear_width = total_center_width + 20;
+            if date_changed && date_slot_x < self.width as usize {
                 for y in 0..self.height as usize {
-                    let start = y * stride + clear_start_x * 4;
-                    let end = start + clear_width * 4;
+                    let start = y * stride + date_slot_x * 4;
+                    let end = start + date_slot_width * 4;
                     if end <= len {
                         slice[start..end].fill(0);
                     }
                 }
 
-                let mut draw_char =
-                    |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
-                        let y = (28usize.saturating_sub(g.height)) / 2;
-                        self.draw_glyph(slice, stride, center_x, y, color, g);
-                        center_x += g.width + extra_margin;
-                    };
+                let date_content_width = self.date_content_width(glyphs, day, month, year);
+                let mut current_x = date_slot_x + date_slot_width.saturating_sub(date_content_width) / 2;
+                let mut draw_char = |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
+                    let y = (28usize.saturating_sub(g.height)) / 2;
+                    self.draw_glyph(slice, stride, current_x, y, color, g);
+                    current_x += g.width + extra_margin;
+                };
 
                 draw_char(&glyphs.calendar_icon, color_date, 6);
                 draw_char(&glyphs.numbers[(day / 10) as usize], color_date, 1);
@@ -257,9 +250,34 @@ impl AppState {
                 draw_char(&glyphs.numbers[(month % 10) as usize], color_date, 1);
                 draw_char(&glyphs.slash, color_date, 1);
                 draw_char(&glyphs.numbers[(year / 10) as usize], color_date, 1);
-                draw_char(&glyphs.numbers[(year % 10) as usize], color_date, 18);
+                draw_char(&glyphs.numbers[(year % 10) as usize], color_date, 0);
 
-                draw_char(&glyphs.time_icon, color_time, 6);
+                let dmg_w = date_slot_width.min((self.width as usize) - date_slot_x);
+                if dmg_w > 0 {
+                    damage.push((date_slot_x as i32, 0, dmg_w as i32, self.height as i32));
+                }
+
+                self.last_day = day;
+                self.last_month = month;
+                self.last_year = year;
+            }
+
+            if clock_changed && time_slot_x < self.width as usize {
+                for y in 0..self.height as usize {
+                    let start = y * stride + time_slot_x * 4;
+                    let end = start + time_slot_width * 4;
+                    if end <= len {
+                        slice[start..end].fill(0);
+                    }
+                }
+
+                let time_content_width = self.time_content_width(glyphs, h, m);
+                let mut current_x = time_slot_x + time_slot_width.saturating_sub(time_content_width) / 2;
+                let mut draw_char = |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
+                    let y = (28usize.saturating_sub(g.height)) / 2;
+                    self.draw_glyph(slice, stride, current_x, y, color, g);
+                    current_x += g.width + extra_margin;
+                };
 
                 let display_h = if h == 0 {
                     12
@@ -270,26 +288,22 @@ impl AppState {
                 };
                 let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
 
+                draw_char(&glyphs.time_icon, color_time, 6);
                 draw_char(&glyphs.numbers[(display_h / 10) as usize], color_time, 1);
                 draw_char(&glyphs.numbers[(display_h % 10) as usize], color_time, 1);
                 draw_char(&glyphs.colon, color_time, 1);
                 draw_char(&glyphs.numbers[(m / 10) as usize], color_time, 1);
                 draw_char(&glyphs.numbers[(m % 10) as usize], color_time, 1);
                 draw_char(&glyphs.space, color_time, 1);
-                draw_char(am_pm, color_time, 1);
+                draw_char(am_pm, color_time, 0);
 
-                damage.push((
-                    clear_start_x as i32,
-                    0,
-                    clear_width as i32,
-                    self.height as i32,
-                ));
+                let dmg_w = time_slot_width.min((self.width as usize) - time_slot_x);
+                if dmg_w > 0 {
+                    damage.push((time_slot_x as i32, 0, dmg_w as i32, self.height as i32));
+                }
 
                 self.last_h = h;
                 self.last_m = m;
-                self.last_day = day;
-                self.last_month = month;
-                self.last_year = year;
             }
 
             self.force_full_redraw = false;
