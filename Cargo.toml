@@ -1,0 +1,16 @@
+[package]
+name = "leanbar"
+version = "0.0.1"
+edition = "2024"
+authors = ["PieInOblivion"]
+license = "MIT"
+description = "Personal rewrite of yambar for hyprland"
+repository = "https://github.com/PieInOblivion/leanbar"
+keywords = []
+categories = []
+readme = "README.md"
+exclude = [
+    ".gitignore",
+]
+
+[dependencies]
