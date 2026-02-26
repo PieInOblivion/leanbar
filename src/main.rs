@@ -1,7 +1,7 @@
 use rustix::event::{EventfdFlags, PollFd, PollFlags, eventfd, poll};
 use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use rustix::io::{read, write};
-use rustix::mm::{MapFlags, ProtFlags, mmap};
+use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use std::os::fd::{AsFd, OwnedFd};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -57,13 +57,13 @@ struct AppState {
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
     layer_shell: Option<ZwlrLayerShellV1>,
-    outputs: Vec<WlOutput>,
 
     // Render state
     layer_surface: Option<ZwlrLayerSurfaceV1>,
     wl_surface: Option<WlSurface>,
     buffer: Option<WlBuffer>,
     pixels: *mut u8,
+    pixels_len: usize,
     width: u32,
     height: u32,
     configured: bool,
@@ -83,7 +83,12 @@ struct AppState {
 }
 
 impl AppState {
-    fn date_content_width(&self, glyphs: &font_renderer::GlyphCache, day: u8, month: u8, year: u8) -> usize {
+    fn date_content_width(
+        glyphs: &font_renderer::GlyphCache,
+        day: u8,
+        month: u8,
+        year: u8,
+    ) -> usize {
         glyphs.calendar_icon.width
             + 6
             + glyphs.numbers[(day / 10) as usize].width
@@ -103,7 +108,7 @@ impl AppState {
             + glyphs.numbers[(year % 10) as usize].width
     }
 
-    fn time_content_width(&self, glyphs: &font_renderer::GlyphCache, h: u8, m: u8) -> usize {
+    fn time_content_width(glyphs: &font_renderer::GlyphCache, h: u8, m: u8) -> usize {
         let display_h = if h == 0 {
             12
         } else if h > 12 {
@@ -131,7 +136,7 @@ impl AppState {
     }
 
     fn draw_bar(&mut self) -> Vec<(i32, i32, i32, i32)> {
-        let mut damage = Vec::new();
+        let mut damage = Vec::with_capacity(3);
 
         if self.pixels.is_null() || self.width == 0 || self.height == 0 {
             return damage;
@@ -158,8 +163,10 @@ impl AppState {
         let year = DATE_YEAR.load(Ordering::Acquire);
 
         let clock_changed = self.force_full_redraw || h != self.last_h || m != self.last_m;
-        let date_changed =
-            self.force_full_redraw || day != self.last_day || month != self.last_month || year != self.last_year;
+        let date_changed = self.force_full_redraw
+            || day != self.last_day
+            || month != self.last_month
+            || year != self.last_year;
 
         if !ws_changed && !clock_changed && !date_changed {
             return damage;
@@ -173,7 +180,8 @@ impl AppState {
 
             let max_digit_width = glyphs.numbers.iter().map(|g| g.width).max().unwrap_or(0);
             let max_ampm_width = glyphs.am.width.max(glyphs.pm.width);
-            let date_slot_width = glyphs.calendar_icon.width + (max_digit_width * 6) + (glyphs.slash.width * 2) + 13;
+            let date_slot_width =
+                glyphs.calendar_icon.width + (max_digit_width * 6) + (glyphs.slash.width * 2) + 13;
             let time_slot_width = glyphs.time_icon.width
                 + (max_digit_width * 4)
                 + glyphs.colon.width
@@ -206,15 +214,37 @@ impl AppState {
 
                         if ws_num == 10 {
                             let y_offset1 = (28usize.saturating_sub(glyphs.numbers[1].height)) / 2;
-                            self.draw_glyph(slice, stride, current_x, y_offset1, color, &glyphs.numbers[1]);
+                            Self::draw_glyph(
+                                slice,
+                                stride,
+                                current_x,
+                                y_offset1,
+                                color,
+                                &glyphs.numbers[1],
+                            );
                             current_x += glyphs.numbers[1].width + 1;
 
                             let y_offset0 = (28usize.saturating_sub(glyphs.numbers[0].height)) / 2;
-                            self.draw_glyph(slice, stride, current_x, y_offset0, color, &glyphs.numbers[0]);
+                            Self::draw_glyph(
+                                slice,
+                                stride,
+                                current_x,
+                                y_offset0,
+                                color,
+                                &glyphs.numbers[0],
+                            );
                             current_x += glyphs.numbers[0].width + 10;
                         } else {
-                            let y_offset = (28usize.saturating_sub(glyphs.numbers[ws_num].height)) / 2;
-                            self.draw_glyph(slice, stride, current_x, y_offset, color, &glyphs.numbers[ws_num]);
+                            let y_offset =
+                                (28usize.saturating_sub(glyphs.numbers[ws_num].height)) / 2;
+                            Self::draw_glyph(
+                                slice,
+                                stride,
+                                current_x,
+                                y_offset,
+                                color,
+                                &glyphs.numbers[ws_num],
+                            );
                             current_x += glyphs.numbers[ws_num].width + 10;
                         }
                     }
@@ -234,13 +264,15 @@ impl AppState {
                     }
                 }
 
-                let date_content_width = self.date_content_width(glyphs, day, month, year);
-                let mut current_x = date_slot_x + date_slot_width.saturating_sub(date_content_width) / 2;
-                let mut draw_char = |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
-                    let y = (28usize.saturating_sub(g.height)) / 2;
-                    self.draw_glyph(slice, stride, current_x, y, color, g);
-                    current_x += g.width + extra_margin;
-                };
+                let date_content_width = Self::date_content_width(glyphs, day, month, year);
+                let mut current_x =
+                    date_slot_x + date_slot_width.saturating_sub(date_content_width) / 2;
+                let mut draw_char =
+                    |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
+                        let y = (28usize.saturating_sub(g.height)) / 2;
+                        Self::draw_glyph(slice, stride, current_x, y, color, g);
+                        current_x += g.width + extra_margin;
+                    };
 
                 draw_char(&glyphs.calendar_icon, color_date, 6);
                 draw_char(&glyphs.numbers[(day / 10) as usize], color_date, 1);
@@ -271,13 +303,15 @@ impl AppState {
                     }
                 }
 
-                let time_content_width = self.time_content_width(glyphs, h, m);
-                let mut current_x = time_slot_x + time_slot_width.saturating_sub(time_content_width) / 2;
-                let mut draw_char = |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
-                    let y = (28usize.saturating_sub(g.height)) / 2;
-                    self.draw_glyph(slice, stride, current_x, y, color, g);
-                    current_x += g.width + extra_margin;
-                };
+                let time_content_width = Self::time_content_width(glyphs, h, m);
+                let mut current_x =
+                    time_slot_x + time_slot_width.saturating_sub(time_content_width) / 2;
+                let mut draw_char =
+                    |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
+                        let y = (28usize.saturating_sub(g.height)) / 2;
+                        Self::draw_glyph(slice, stride, current_x, y, color, g);
+                        current_x += g.width + extra_margin;
+                    };
 
                 let display_h = if h == 0 {
                     12
@@ -313,7 +347,6 @@ impl AppState {
     }
 
     fn draw_glyph(
-        &self,
         pixels: &mut [u8],
         stride: usize,
         start_x: usize,
@@ -381,9 +414,6 @@ impl Dispatch<WlRegistry, ()> for AppState {
                 "zwlr_layer_shell_v1" => {
                     state.layer_shell = Some(registry.bind(name, 4, qhandle, ()));
                 }
-                "wl_output" => {
-                    state.outputs.push(registry.bind(name, 4, qhandle, ()));
-                }
                 _ => {}
             }
         }
@@ -411,6 +441,16 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
             let h = if height == 0 { 28 } else { height };
 
             if state.width != w || state.height != h {
+                if let Some(old_buffer) = state.buffer.take() {
+                    old_buffer.destroy();
+                }
+
+                if !state.pixels.is_null() && state.pixels_len > 0 {
+                    let _ = unsafe { munmap(state.pixels.cast(), state.pixels_len) };
+                    state.pixels = ptr::null_mut();
+                    state.pixels_len = 0;
+                }
+
                 state.width = w;
                 state.height = h;
 
@@ -432,7 +472,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
                     .unwrap()
                 };
 
-                state.pixels = ptr as *mut u8;
+                state.pixels = ptr.cast();
+                state.pixels_len = size as usize;
 
                 let pool = state.shm.as_ref().unwrap().create_pool(
                     memfd.as_fd(),
@@ -569,11 +610,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compositor: None,
         shm: None,
         layer_shell: None,
-        outputs: Vec::new(),
         layer_surface: None,
         wl_surface: None,
         buffer: None,
         pixels: ptr::null_mut(),
+        pixels_len: 0,
         width: 0,
         height: 0,
         configured: false,
