@@ -43,7 +43,7 @@ pub fn start(wake_fd: OwnedFd) {
                 }
 
                 // Sleep until roughly the start of the next second to keep the clock accurate
-                thread::sleep(Duration::from_millis(1000));
+                thread::sleep(Duration::from_secs(1));
             }
         });
 }
