@@ -761,74 +761,9 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
     }
 }
 
-impl Dispatch<WlCompositor, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &WlCompositor,
-        _: <WlCompositor as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WlShm, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &WlShm,
-        _: <WlShm as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<ZwlrLayerShellV1, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &ZwlrLayerShellV1,
-        _: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WlSurface, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &WlSurface,
-        _: <WlSurface as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WlBuffer, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &WlBuffer,
-        _: <WlBuffer as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &wayland_client::protocol::wl_shm_pool::WlShmPool,
-        _: <wayland_client::protocol::wl_shm_pool::WlShmPool as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
+wayland_client::delegate_noop!(AppState: ignore WlCompositor);
+wayland_client::delegate_noop!(AppState: ignore WlShm);
+wayland_client::delegate_noop!(AppState: ignore ZwlrLayerShellV1);
+wayland_client::delegate_noop!(AppState: ignore WlSurface);
+wayland_client::delegate_noop!(AppState: ignore WlBuffer);
+wayland_client::delegate_noop!(AppState: ignore wayland_client::protocol::wl_shm_pool::WlShmPool);
