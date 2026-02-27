@@ -1,7 +1,8 @@
 use rustix::event::{EventfdFlags, PollFd, PollFlags, eventfd, poll};
 use rustix::io::{read, write};
+use std::fs;
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use wayland_client::Connection;
 
@@ -31,6 +32,8 @@ pub static DATE_DAY: AtomicU8 = AtomicU8::new(0);
 pub static DATE_MONTH: AtomicU8 = AtomicU8::new(0);
 pub static DATE_YEAR: AtomicU8 = AtomicU8::new(0);
 pub static BATTERY_PERCENT: AtomicU8 = AtomicU8::new(100);
+pub static BATTERY_STATE: AtomicU8 = AtomicU8::new(255); // 0: Unknown, 1: Discharging, 2: Charging, 3: Full, 255: No Battery
+pub static BATTERY_ESTIMATE_M: AtomicU16 = AtomicU16::new(0);
 
 pub fn ping_main_thread(fd: &OwnedFd) {
     let _ = write(fd, &1u64.to_ne_bytes());
@@ -44,10 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting leanbar...");
 
-    let font_path = "/usr/share/fonts/TTF/SauceCodeProNerdFont-Regular.ttf";
-    let glyph_cache = font_renderer::GlyphCache::load_or_build(font_path, 16.0).ok();
+    let font_path = "/usr/share/fonts/noto/NotoSans-Regular.ttf";
+    let glyph_cache = font_renderer::GlyphCache::load_or_build(font_path, 15.0).ok();
     if glyph_cache.is_none() {
         eprintln!("Failed to load font. Make sure the path is correct.");
+    }
+
+    // Check if battery exists on startup
+    if fs::metadata("/sys/class/power_supply/BAT0/capacity").is_ok() {
+        BATTERY_STATE.store(0, Ordering::Release);
     }
 
     let conn = Connection::connect_to_env()?;

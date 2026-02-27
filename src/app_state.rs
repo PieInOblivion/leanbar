@@ -20,8 +20,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::{
-    ACTIVE_WORKSPACE, DATE_DAY, DATE_MONTH, DATE_YEAR, TIME_HOURS, TIME_MINUTES, WORKSPACES,
-    font_renderer,
+    ACTIVE_WORKSPACE, BATTERY_ESTIMATE_M, BATTERY_PERCENT, BATTERY_STATE, DATE_DAY, DATE_MONTH,
+    DATE_YEAR, TIME_HOURS, TIME_MINUTES, WORKSPACES, font_renderer,
 };
 
 pub struct AppState {
@@ -46,6 +46,9 @@ pub struct AppState {
     pub last_day: u8,
     pub last_month: u8,
     pub last_year: u8,
+    pub last_bat_percent: u8,
+    pub last_bat_state: u8,
+    pub last_bat_est_m: u16,
 
     pub glyphs: Option<font_renderer::GlyphCache>,
 }
@@ -72,6 +75,9 @@ impl AppState {
             last_day: 255,
             last_month: 255,
             last_year: 255,
+            last_bat_percent: 255,
+            last_bat_state: 255,
+            last_bat_est_m: 65535,
             glyphs,
         }
     }
@@ -143,9 +149,7 @@ impl AppState {
         month: u8,
         year: u8,
     ) -> usize {
-        glyphs.calendar_icon.width
-            + 6
-            + glyphs.numbers[(day / 10) as usize].width
+        glyphs.numbers[(day / 10) as usize].width
             + 1
             + glyphs.numbers[(day % 10) as usize].width
             + 1
@@ -172,9 +176,7 @@ impl AppState {
         };
         let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
 
-        glyphs.time_icon.width
-            + 6
-            + glyphs.numbers[(display_h / 10) as usize].width
+        glyphs.numbers[(display_h / 10) as usize].width
             + 1
             + glyphs.numbers[(display_h % 10) as usize].width
             + 1
@@ -189,8 +191,59 @@ impl AppState {
             + am_pm.width
     }
 
+    fn battery_content_width(
+        glyphs: &font_renderer::GlyphCache,
+        percent: u8,
+        state: u8,
+        est_m_total: u16,
+    ) -> usize {
+        if state == 3 {
+            return glyphs.full.width;
+        }
+
+        let mut w = 0;
+        if percent == 100 {
+            w += glyphs.numbers[1].width
+                + 1
+                + glyphs.numbers[0].width
+                + 1
+                + glyphs.numbers[0].width
+                + 1;
+        } else if percent >= 10 {
+            w += glyphs.numbers[(percent / 10) as usize].width
+                + 1
+                + glyphs.numbers[(percent % 10) as usize].width
+                + 1;
+        } else {
+            w += glyphs.numbers[percent as usize].width + 1;
+        }
+
+        w += glyphs.percent.width;
+
+        w += glyphs.space.width * 2 + 2; // "  "
+        w += if state == 2 {
+            glyphs.plus.width
+        } else {
+            glyphs.minus.width
+        };
+        w += glyphs.space.width * 2 + 2; // "  "
+
+        let est_h = (est_m_total / 60) as u8;
+        let est_m = (est_m_total % 60) as u8;
+
+        w += glyphs.numbers[(est_h / 10) as usize].width
+            + 1
+            + glyphs.numbers[(est_h % 10) as usize].width
+            + 1;
+        w += glyphs.colon.width + 1;
+        w += glyphs.numbers[(est_m / 10) as usize].width
+            + 1
+            + glyphs.numbers[(est_m % 10) as usize].width;
+        w
+    }
+
     fn draw_bar(&mut self) -> Vec<(i32, i32, i32, i32)> {
-        let mut damage = Vec::with_capacity(3);
+        let mut damage = Vec::with_capacity(4);
 
         if self.pixels.is_null() || self.width == 0 || self.height == 0 {
             return damage;
@@ -222,7 +275,16 @@ impl AppState {
             || month != self.last_month
             || year != self.last_year;
 
-        if !ws_changed && !clock_changed && !date_changed {
+        let bat_percent = BATTERY_PERCENT.load(Ordering::Acquire);
+        let bat_state = BATTERY_STATE.load(Ordering::Acquire);
+        let bat_est_m_total = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
+
+        let bat_changed = self.force_full_redraw
+            || bat_percent != self.last_bat_percent
+            || bat_state != self.last_bat_state
+            || bat_est_m_total != self.last_bat_est_m;
+
+        if !ws_changed && !clock_changed && !date_changed && !bat_changed {
             return damage;
         }
 
@@ -231,22 +293,27 @@ impl AppState {
             let color_ws_focused = [0xff, 0xff, 0xff, 0xff];
             let color_ws_other = [0xf7, 0xa6, 0xcb, 0xff];
             let color_date = [0xec, 0xc7, 0x74, 0xff];
+            let color_bat = [0xa1, 0xe3, 0xa6, 0xff];
 
             let max_digit_width = glyphs.numbers.iter().map(|g| g.width).max().unwrap_or(0);
             let max_ampm_width = glyphs.am.width.max(glyphs.pm.width);
-            let date_slot_width =
-                glyphs.calendar_icon.width + (max_digit_width * 6) + (glyphs.slash.width * 2) + 13;
-            let time_slot_width = glyphs.time_icon.width
-                + (max_digit_width * 4)
+
+            // Re-calculated widths without icons
+            let date_slot_width = (max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
+            let time_slot_width = (max_digit_width * 4)
                 + glyphs.colon.width
                 + glyphs.space.width
                 + max_ampm_width
-                + 12;
+                + 5;
+
             let center_gap = 24usize;
             let center_total_width = date_slot_width + center_gap + time_slot_width;
             let center_start = (self.width as usize).saturating_sub(center_total_width) / 2;
             let date_slot_x = center_start;
             let time_slot_x = center_start + date_slot_width + center_gap;
+
+            let bat_max_width = 160;
+            let bat_slot_x = (self.width as usize).saturating_sub(bat_max_width);
 
             if ws_changed {
                 let ws_area_width = 600.min(self.width as usize);
@@ -328,7 +395,6 @@ impl AppState {
                         current_x += g.width + extra_margin;
                     };
 
-                draw_char(&glyphs.calendar_icon, color_date, 6);
                 draw_char(&glyphs.numbers[(day / 10) as usize], color_date, 1);
                 draw_char(&glyphs.numbers[(day % 10) as usize], color_date, 1);
                 draw_char(&glyphs.slash, color_date, 1);
@@ -376,7 +442,6 @@ impl AppState {
                 };
                 let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
 
-                draw_char(&glyphs.time_icon, color_time, 6);
                 draw_char(&glyphs.numbers[(display_h / 10) as usize], color_time, 1);
                 draw_char(&glyphs.numbers[(display_h % 10) as usize], color_time, 1);
                 draw_char(&glyphs.colon, color_time, 1);
@@ -392,6 +457,75 @@ impl AppState {
 
                 self.last_h = h;
                 self.last_m = m;
+            }
+
+            if bat_changed && bat_slot_x < self.width as usize && bat_state != 255 {
+                for y in 0..self.height as usize {
+                    let start = y * stride + bat_slot_x * 4;
+                    let end = start + bat_max_width * 4;
+                    if end <= len {
+                        slice[start..end].fill(0);
+                    }
+                }
+
+                let bat_content_width =
+                    Self::battery_content_width(glyphs, bat_percent, bat_state, bat_est_m_total);
+                // 10px right margin
+                let mut current_x = (self.width as usize).saturating_sub(10 + bat_content_width);
+
+                let mut draw_char =
+                    |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
+                        let y = (28usize.saturating_sub(g.height)) / 2;
+                        Self::draw_glyph(slice, stride, current_x, y, color, g);
+                        current_x += g.width + extra_margin;
+                    };
+
+                if bat_state == 3 {
+                    draw_char(&glyphs.full, color_bat, 0);
+                } else {
+                    if bat_percent == 100 {
+                        draw_char(&glyphs.numbers[1], color_bat, 1);
+                        draw_char(&glyphs.numbers[0], color_bat, 1);
+                        draw_char(&glyphs.numbers[0], color_bat, 1);
+                    } else if bat_percent >= 10 {
+                        draw_char(&glyphs.numbers[(bat_percent / 10) as usize], color_bat, 1);
+                        draw_char(&glyphs.numbers[(bat_percent % 10) as usize], color_bat, 1);
+                    } else {
+                        draw_char(&glyphs.numbers[bat_percent as usize], color_bat, 1);
+                    }
+
+                    draw_char(&glyphs.percent, color_bat, 0);
+
+                    draw_char(&glyphs.space, color_bat, 1);
+                    draw_char(&glyphs.space, color_bat, 1);
+
+                    if bat_state == 2 {
+                        draw_char(&glyphs.plus, color_bat, 0);
+                    } else {
+                        draw_char(&glyphs.minus, color_bat, 0);
+                    }
+
+                    draw_char(&glyphs.space, color_bat, 1);
+                    draw_char(&glyphs.space, color_bat, 1);
+
+                    let est_h = (bat_est_m_total / 60) as u8;
+                    let est_m = (bat_est_m_total % 60) as u8;
+
+                    draw_char(&glyphs.numbers[(est_h / 10) as usize], color_bat, 1);
+                    draw_char(&glyphs.numbers[(est_h % 10) as usize], color_bat, 1);
+                    draw_char(&glyphs.colon, color_bat, 1);
+                    draw_char(&glyphs.numbers[(est_m / 10) as usize], color_bat, 1);
+                    draw_char(&glyphs.numbers[(est_m % 10) as usize], color_bat, 0);
+                }
+
+                let dmg_w = bat_max_width.min((self.width as usize) - bat_slot_x);
+                if dmg_w > 0 {
+                    damage.push((bat_slot_x as i32, 0, dmg_w as i32, self.height as i32));
+                }
+
+                self.last_bat_percent = bat_percent;
+                self.last_bat_state = bat_state;
+                self.last_bat_est_m = bat_est_m_total;
             }
 
             self.force_full_redraw = false;

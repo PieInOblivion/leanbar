@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
-const ATLAS_MAGIC: &[u8; 5] = b"LBAT1";
-const GLYPH_COUNT: usize = 17;
+const ATLAS_MAGIC: &[u8; 5] = b"LBAT1"; // leanbar atlas v1
+const GLYPH_COUNT: usize = 19;
 
 #[derive(Default)]
 pub struct RasterizedGlyph {
@@ -25,8 +25,10 @@ pub struct GlyphCache {
     pub slash: RasterizedGlyph,
     pub colon: RasterizedGlyph,
     pub space: RasterizedGlyph,
-    pub time_icon: RasterizedGlyph,
-    pub calendar_icon: RasterizedGlyph,
+    pub percent: RasterizedGlyph,
+    pub plus: RasterizedGlyph,
+    pub minus: RasterizedGlyph,
+    pub full: RasterizedGlyph,
 }
 
 impl GlyphCache {
@@ -63,8 +65,10 @@ impl GlyphCache {
         let slash = rasterize_char(&font, '/', size);
         let colon = rasterize_char(&font, ':', size);
         let space = rasterize_char(&font, ' ', size);
-        let time_icon = rasterize_char(&font, '', size);
-        let calendar_icon = rasterize_char(&font, '', size);
+        let percent = rasterize_char(&font, '%', size);
+        let plus = rasterize_char(&font, '+', size);
+        let minus = rasterize_char(&font, '-', size);
+        let full = rasterize_string(&font, "Full", size);
 
         Ok(GlyphCache {
             numbers,
@@ -73,8 +77,10 @@ impl GlyphCache {
             slash,
             colon,
             space,
-            time_icon,
-            calendar_icon,
+            percent,
+            plus,
+            minus,
+            full,
         })
     }
 
@@ -88,8 +94,10 @@ impl GlyphCache {
             .into());
         }
 
-        let calendar_icon = all.pop().ok_or("missing calendar_icon")?;
-        let time_icon = all.pop().ok_or("missing time_icon")?;
+        let full = all.pop().ok_or("missing full")?;
+        let minus = all.pop().ok_or("missing minus")?;
+        let plus = all.pop().ok_or("missing plus")?;
+        let percent = all.pop().ok_or("missing percent")?;
         let space = all.pop().ok_or("missing space")?;
         let colon = all.pop().ok_or("missing colon")?;
         let slash = all.pop().ok_or("missing slash")?;
@@ -108,8 +116,10 @@ impl GlyphCache {
             slash,
             colon,
             space,
-            time_icon,
-            calendar_icon,
+            percent,
+            plus,
+            minus,
+            full,
         })
     }
 
@@ -214,8 +224,10 @@ impl GlyphCache {
             &self.slash,
             &self.colon,
             &self.space,
-            &self.time_icon,
-            &self.calendar_icon,
+            &self.percent,
+            &self.plus,
+            &self.minus,
+            &self.full,
         ]
     }
 }
