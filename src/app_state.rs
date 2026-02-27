@@ -307,10 +307,11 @@ impl AppState {
                 + 5;
 
             let center_gap = 24usize;
-            let center_total_width = date_slot_width + center_gap + time_slot_width;
-            let center_start = (self.width as usize).saturating_sub(center_total_width) / 2;
-            let date_slot_x = center_start;
-            let time_slot_x = center_start + date_slot_width + center_gap;
+            let screen_center = (self.width as usize) / 2;
+            let date_slot_x = screen_center
+                .saturating_sub(center_gap / 2)
+                .saturating_sub(date_slot_width);
+            let time_slot_x = screen_center + (center_gap / 2);
 
             let bat_max_width = 160;
             let bat_slot_x = (self.width as usize).saturating_sub(bat_max_width);
