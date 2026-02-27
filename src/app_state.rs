@@ -166,31 +166,6 @@ impl AppState {
             + glyphs.numbers[(year % 10) as usize].width
     }
 
-    fn time_content_width(glyphs: &font_renderer::GlyphCache, h: u8, m: u8) -> usize {
-        let display_h = if h == 0 {
-            12
-        } else if h > 12 {
-            h - 12
-        } else {
-            h
-        };
-        let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
-
-        glyphs.numbers[(display_h / 10) as usize].width
-            + 1
-            + glyphs.numbers[(display_h % 10) as usize].width
-            + 1
-            + glyphs.colon.width
-            + 1
-            + glyphs.numbers[(m / 10) as usize].width
-            + 1
-            + glyphs.numbers[(m % 10) as usize].width
-            + 1
-            + glyphs.space.width
-            + 1
-            + am_pm.width
-    }
-
     fn battery_content_width(
         glyphs: &font_renderer::GlyphCache,
         percent: u8,
@@ -220,13 +195,14 @@ impl AppState {
 
         w += glyphs.percent.width;
 
-        w += glyphs.space.width * 2 + 2; // "  "
+        // 3px gap around the separator
+        w += 3;
         w += if state == 2 {
             glyphs.plus.width
         } else {
             glyphs.minus.width
         };
-        w += glyphs.space.width * 2 + 2; // "  "
+        w += 3;
 
         let est_h = (est_m_total / 60) as u8;
         let est_m = (est_m_total % 60) as u8;
@@ -298,7 +274,10 @@ impl AppState {
             let max_digit_width = glyphs.numbers.iter().map(|g| g.width).max().unwrap_or(0);
             let max_ampm_width = glyphs.am.width.max(glyphs.pm.width);
 
-            // Re-calculated widths without icons
+            let center_gap = 24usize;
+            let screen_center = (self.width as usize) / 2;
+
+            // Slots define clear/damage areas
             let date_slot_width = (max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
             let time_slot_width = (max_digit_width * 4)
                 + glyphs.colon.width
@@ -306,14 +285,12 @@ impl AppState {
                 + max_ampm_width
                 + 5;
 
-            let center_gap = 24usize;
-            let screen_center = (self.width as usize) / 2;
             let date_slot_x = screen_center
                 .saturating_sub(center_gap / 2)
                 .saturating_sub(date_slot_width);
             let time_slot_x = screen_center + (center_gap / 2);
 
-            let bat_max_width = 160;
+            let bat_max_width = 180;
             let bat_slot_x = (self.width as usize).saturating_sub(bat_max_width);
 
             if ws_changed {
@@ -324,7 +301,7 @@ impl AppState {
                     slice[start..end].fill(0);
                 }
 
-                let mut current_x = 10;
+                let mut current_x = 11;
                 for (i, ws) in current_ws.iter().enumerate() {
                     let ws_num = i + 1;
                     if *ws || active_ws == ws_num as u8 {
@@ -387,8 +364,11 @@ impl AppState {
                 }
 
                 let date_content_width = Self::date_content_width(glyphs, day, month, year);
-                let mut current_x =
-                    date_slot_x + date_slot_width.saturating_sub(date_content_width) / 2;
+                // Align to the RIGHT against the gap
+                let mut current_x = screen_center
+                    .saturating_sub(center_gap / 2)
+                    .saturating_sub(date_content_width);
+
                 let mut draw_char =
                     |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
                         let y = (28usize.saturating_sub(g.height)) / 2;
@@ -424,9 +404,9 @@ impl AppState {
                     }
                 }
 
-                let time_content_width = Self::time_content_width(glyphs, h, m);
-                let mut current_x =
-                    time_slot_x + time_slot_width.saturating_sub(time_content_width) / 2;
+                // Align to the LEFT against the gap
+                let mut current_x = screen_center + (center_gap / 2);
+
                 let mut draw_char =
                     |g: &font_renderer::RasterizedGlyph, color: [u8; 4], extra_margin: usize| {
                         let y = (28usize.saturating_sub(g.height)) / 2;
@@ -495,19 +475,13 @@ impl AppState {
                         draw_char(&glyphs.numbers[bat_percent as usize], color_bat, 1);
                     }
 
-                    draw_char(&glyphs.percent, color_bat, 0);
-
-                    draw_char(&glyphs.space, color_bat, 1);
-                    draw_char(&glyphs.space, color_bat, 1);
+                    draw_char(&glyphs.percent, color_bat, 3);
 
                     if bat_state == 2 {
-                        draw_char(&glyphs.plus, color_bat, 0);
+                        draw_char(&glyphs.plus, color_bat, 3);
                     } else {
-                        draw_char(&glyphs.minus, color_bat, 0);
+                        draw_char(&glyphs.minus, color_bat, 3);
                     }
-
-                    draw_char(&glyphs.space, color_bat, 1);
-                    draw_char(&glyphs.space, color_bat, 1);
 
                     let est_h = (bat_est_m_total / 60) as u8;
                     let est_m = (bat_est_m_total % 60) as u8;
