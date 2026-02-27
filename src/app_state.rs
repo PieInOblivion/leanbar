@@ -528,7 +528,7 @@ impl AppState {
                         (&glyphs.colon, 1),
                         (&glyphs.numbers[(m / 10) as usize], 1),
                         (&glyphs.numbers[(m % 10) as usize], 1),
-                        (&glyphs.space, 1),
+                        (&glyphs.space, 2),
                         (am_pm, 0),
                     ],
                 );
