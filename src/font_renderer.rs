@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
@@ -29,7 +29,6 @@ pub struct GlyphCache {
     pub plus: RasterizedGlyph,
     pub minus: RasterizedGlyph,
     pub full: RasterizedGlyph,
-
     pub max_digit_width: usize,
     pub max_ampm_width: usize,
 }
@@ -37,42 +36,23 @@ pub struct GlyphCache {
 impl GlyphCache {
     pub fn load_or_build(font_path: &str, size: f32) -> Result<Self, Box<dyn std::error::Error>> {
         let atlas_path = atlas_cache_path(font_path, size)?;
-
         if let Ok(cache) = Self::load_from_atlas(font_path, size, &atlas_path) {
             println!("[FontAtlas] cache hit: {}", atlas_path.display());
             return Ok(cache);
         }
-
-        println!(
-            "[FontAtlas] cache miss: {}, rebuilding",
-            atlas_path.display()
-        );
+        println!("[FontAtlas] cache miss: rebuilding");
         build_atlas_with_helper(font_path, size, &atlas_path)?;
-        let cache = Self::load_from_atlas(font_path, size, &atlas_path)?;
-        println!("[FontAtlas] cache ready: {}", atlas_path.display());
-        Ok(cache)
+        Self::load_from_atlas(font_path, size, &atlas_path)
     }
 
     fn from_font(font_path: &str, size: f32) -> Result<Self, Box<dyn std::error::Error>> {
-        let font_data = fs::read(font_path)?;
-        let font =
-            Font::from_bytes(font_data, FontSettings::default()).map_err(|e| e.to_string())?;
-
-        let mut numbers: [RasterizedGlyph; 10] = Default::default();
-        for (i, c) in ('0'..='9').enumerate() {
-            numbers[i] = rasterize_char(&font, c, size);
-        }
+        let font = Font::from_bytes(fs::read(font_path)?, FontSettings::default())
+            .map_err(|e| e.to_string())?;
+        let numbers: [RasterizedGlyph; 10] =
+            std::array::from_fn(|i| rasterize_char(&font, (b'0' + i as u8) as char, size));
 
         let am = rasterize_string(&font, "AM", size);
         let pm = rasterize_string(&font, "PM", size);
-        let slash = rasterize_char(&font, '/', size);
-        let colon = rasterize_char(&font, ':', size);
-        let space = rasterize_char(&font, ' ', size);
-        let percent = rasterize_char(&font, '%', size);
-        let plus = rasterize_char(&font, '+', size);
-        let minus = rasterize_char(&font, '-', size);
-        let full = rasterize_string(&font, "Full", size);
-
         let max_digit_width = numbers.iter().map(|g| g.width).max().unwrap_or(0);
         let max_ampm_width = am.width.max(pm.width);
 
@@ -80,43 +60,27 @@ impl GlyphCache {
             numbers,
             am,
             pm,
-            slash,
-            colon,
-            space,
-            percent,
-            plus,
-            minus,
-            full,
+            slash: rasterize_char(&font, '/', size),
+            colon: rasterize_char(&font, ':', size),
+            space: rasterize_char(&font, ' ', size),
+            percent: rasterize_char(&font, '%', size),
+            plus: rasterize_char(&font, '+', size),
+            minus: rasterize_char(&font, '-', size),
+            full: rasterize_string(&font, "Full", size),
             max_digit_width,
             max_ampm_width,
         })
     }
 
-    fn from_vec(mut all: Vec<RasterizedGlyph>) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_vec(all: Vec<RasterizedGlyph>) -> Result<Self, Box<dyn std::error::Error>> {
         if all.len() != GLYPH_COUNT {
-            return Err(format!(
-                "invalid glyph count: expected {}, got {}",
-                GLYPH_COUNT,
-                all.len()
-            )
-            .into());
+            return Err(format!("expected {} glyphs, got {}", GLYPH_COUNT, all.len()).into());
         }
+        let mut it = all.into_iter();
+        let numbers: [RasterizedGlyph; 10] = std::array::from_fn(|_| it.next().unwrap());
 
-        let full = all.pop().ok_or("missing full")?;
-        let minus = all.pop().ok_or("missing minus")?;
-        let plus = all.pop().ok_or("missing plus")?;
-        let percent = all.pop().ok_or("missing percent")?;
-        let space = all.pop().ok_or("missing space")?;
-        let colon = all.pop().ok_or("missing colon")?;
-        let slash = all.pop().ok_or("missing slash")?;
-        let pm = all.pop().ok_or("missing pm")?;
-        let am = all.pop().ok_or("missing am")?;
-
-        let numbers_vec = all;
-        let numbers: [RasterizedGlyph; 10] = numbers_vec
-            .try_into()
-            .map_err(|_| "invalid number glyph count")?;
-
+        let am = it.next().unwrap();
+        let pm = it.next().unwrap();
         let max_digit_width = numbers.iter().map(|g| g.width).max().unwrap_or(0);
         let max_ampm_width = am.width.max(pm.width);
 
@@ -124,13 +88,13 @@ impl GlyphCache {
             numbers,
             am,
             pm,
-            slash,
-            colon,
-            space,
-            percent,
-            plus,
-            minus,
-            full,
+            slash: it.next().unwrap(),
+            colon: it.next().unwrap(),
+            space: it.next().unwrap(),
+            percent: it.next().unwrap(),
+            plus: it.next().unwrap(),
+            minus: it.next().unwrap(),
+            full: it.next().unwrap(),
             max_digit_width,
             max_ampm_width,
         })
@@ -142,81 +106,65 @@ impl GlyphCache {
         size: f32,
         target_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mtime = font_mtime(font_path)?;
-
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-
-        let mut file = fs::File::create(target_path)?;
-        file.write_all(ATLAS_MAGIC)?;
-
-        write_u32(&mut file, font_path.len() as u32)?;
-        file.write_all(font_path.as_bytes())?;
-
-        write_u64(&mut file, mtime.0)?;
-        write_u32(&mut file, mtime.1)?;
-        write_u32(&mut file, size.to_bits())?;
-
+        let mut writer = BufWriter::new(fs::File::create(target_path)?);
+        writer.write_all(ATLAS_MAGIC)?;
+        writer.write_all(&(font_path.len() as u32).to_le_bytes())?;
+        writer.write_all(font_path.as_bytes())?;
+        let (secs, nanos) = font_mtime(font_path)?;
+        writer.write_all(&secs.to_le_bytes())?;
+        writer.write_all(&nanos.to_le_bytes())?;
+        writer.write_all(&size.to_bits().to_le_bytes())?;
         for glyph in self.as_slice_ordered() {
-            write_u16(&mut file, glyph.width as u16)?;
-            write_u16(&mut file, glyph.height as u16)?;
-            write_u32(&mut file, glyph.coverage.len() as u32)?;
-            file.write_all(&glyph.coverage)?;
+            writer.write_all(&(glyph.width as u16).to_le_bytes())?;
+            writer.write_all(&(glyph.height as u16).to_le_bytes())?;
+            writer.write_all(&(glyph.coverage.len() as u32).to_le_bytes())?;
+            writer.write_all(&glyph.coverage)?;
         }
-
+        writer.flush()?;
         Ok(())
     }
 
     fn load_from_atlas(
-        expected_font_path: &str,
+        expected_path: &str,
         expected_size: f32,
         atlas_path: &Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut file = fs::File::open(atlas_path)?;
+        let bytes = fs::read(atlas_path)?;
+        let mut cursor = bytes.as_slice();
 
-        let mut magic = [0u8; 5];
-        file.read_exact(&mut magic)?;
-        if &magic != ATLAS_MAGIC {
+        if take(&mut cursor, ATLAS_MAGIC.len())? != ATLAS_MAGIC {
             return Err("invalid atlas magic".into());
         }
 
-        let path_len = read_u32(&mut file)? as usize;
-        let mut path_bytes = vec![0u8; path_len];
-        file.read_exact(&mut path_bytes)?;
-        let atlas_font_path = String::from_utf8(path_bytes)?;
-
-        let atlas_mtime_sec = read_u64(&mut file)?;
-        let atlas_mtime_nsec = read_u32(&mut file)?;
-        let atlas_size_bits = read_u32(&mut file)?;
-
-        if atlas_font_path != expected_font_path {
-            return Err("atlas font path mismatch".into());
+        let path_len = u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?) as usize;
+        if String::from_utf8(take(&mut cursor, path_len)?.to_vec())? != expected_path {
+            return Err("path mismatch".into());
         }
 
-        let current_mtime = font_mtime(expected_font_path)?;
-        if current_mtime != (atlas_mtime_sec, atlas_mtime_nsec) {
-            return Err("atlas font timestamp mismatch".into());
+        let secs = u64::from_le_bytes(take(&mut cursor, 8)?.try_into()?);
+        let nanos = u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?);
+        if font_mtime(expected_path)? != (secs, nanos) {
+            return Err("mtime mismatch".into());
         }
 
-        if atlas_size_bits != expected_size.to_bits() {
-            return Err("atlas font size mismatch".into());
+        if u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?) != expected_size.to_bits() {
+            return Err("size mismatch".into());
         }
 
         let mut glyphs = Vec::with_capacity(GLYPH_COUNT);
         for _ in 0..GLYPH_COUNT {
-            let width = read_u16(&mut file)? as usize;
-            let height = read_u16(&mut file)? as usize;
-            let cov_len = read_u32(&mut file)? as usize;
-            let mut coverage = vec![0u8; cov_len];
-            file.read_exact(&mut coverage)?;
+            let width = u16::from_le_bytes(take(&mut cursor, 2)?.try_into()?) as usize;
+            let height = u16::from_le_bytes(take(&mut cursor, 2)?.try_into()?) as usize;
+            let cov_len = u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?) as usize;
             glyphs.push(RasterizedGlyph {
                 width,
                 height,
-                coverage,
+                coverage: take(&mut cursor, cov_len)?.to_vec(),
             });
         }
-
         GlyphCache::from_vec(glyphs)
     }
 
@@ -249,14 +197,11 @@ pub fn maybe_run_builder_mode(args: &[String]) -> Result<bool, Box<dyn std::erro
     if args.get(1).map(String::as_str) != Some("--build-font-atlas") {
         return Ok(false);
     }
-
     let font_path = args.get(2).ok_or("missing font path")?;
     let size: f32 = args.get(3).ok_or("missing size")?.parse()?;
     let atlas_path = args.get(4).ok_or("missing atlas path")?;
 
-    let glyph_cache = GlyphCache::from_font(font_path, size)?;
-    glyph_cache.write_atlas(font_path, size, Path::new(atlas_path))?;
-
+    GlyphCache::from_font(font_path, size)?.write_atlas(font_path, size, Path::new(atlas_path))?;
     Ok(true)
 }
 
@@ -285,76 +230,35 @@ fn build_atlas_with_helper(
 }
 
 fn atlas_cache_path(font_path: &str, size: f32) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let cache_root = if let Ok(path) = env::var("XDG_CACHE_HOME") {
-        PathBuf::from(path)
-    } else {
-        let home = env::var("HOME")?;
-        PathBuf::from(home).join(".cache")
-    };
-
-    let font_name = Path::new(font_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("font")
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
+    let cache_root = env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| env::var("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
     let mut hasher = DefaultHasher::new();
     font_path.hash(&mut hasher);
-    let path_hash = hasher.finish();
-    let size_tag = format!("{:02}", (size * 10.0).round() as u32);
-
+    let name = Path::new(font_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("font");
     Ok(cache_root.join("leanbar").join(format!(
-        "font_atlas_{}_{}_{}.bin",
-        font_name, path_hash, size_tag
+        "font_atlas_{}_{}_{:02}.bin",
+        name,
+        hasher.finish(),
+        (size * 10.0).round() as u32
     )))
 }
 
-fn font_mtime(font_path: &str) -> Result<(u64, u32), Box<dyn std::error::Error>> {
-    let meta = fs::metadata(font_path)?;
-    let modified = meta.modified()?;
-    let dur = modified.duration_since(UNIX_EPOCH)?;
+fn font_mtime(path: &str) -> Result<(u64, u32), Box<dyn std::error::Error>> {
+    let dur = fs::metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?;
     Ok((dur.as_secs(), dur.subsec_nanos()))
 }
 
-fn write_u16<W: Write>(w: &mut W, value: u16) -> Result<(), Box<dyn std::error::Error>> {
-    w.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn write_u32<W: Write>(w: &mut W, value: u32) -> Result<(), Box<dyn std::error::Error>> {
-    w.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn write_u64<W: Write>(w: &mut W, value: u64) -> Result<(), Box<dyn std::error::Error>> {
-    w.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn read_u16<R: Read>(r: &mut R) -> Result<u16, Box<dyn std::error::Error>> {
-    let mut bytes = [0u8; 2];
-    r.read_exact(&mut bytes)?;
-    Ok(u16::from_le_bytes(bytes))
-}
-
-fn read_u32<R: Read>(r: &mut R) -> Result<u32, Box<dyn std::error::Error>> {
-    let mut bytes = [0u8; 4];
-    r.read_exact(&mut bytes)?;
-    Ok(u32::from_le_bytes(bytes))
-}
-
-fn read_u64<R: Read>(r: &mut R) -> Result<u64, Box<dyn std::error::Error>> {
-    let mut bytes = [0u8; 8];
-    r.read_exact(&mut bytes)?;
-    Ok(u64::from_le_bytes(bytes))
+fn take<'a>(cursor: &mut &'a [u8], n: usize) -> Result<&'a [u8], Box<dyn std::error::Error>> {
+    if cursor.len() < n {
+        return Err("unexpected end of file".into());
+    }
+    let (head, tail) = cursor.split_at(n);
+    *cursor = tail;
+    Ok(head)
 }
 
 fn rasterize_char(font: &Font, c: char, size: f32) -> RasterizedGlyph {
@@ -368,7 +272,7 @@ fn rasterize_char(font: &Font, c: char, size: f32) -> RasterizedGlyph {
 
 fn rasterize_string(font: &Font, s: &str, size: f32) -> RasterizedGlyph {
     let mut glyphs = Vec::new();
-    let mut current_x = 0.0_f32;
+    let mut current_x: f32 = 0.0;
 
     let mut min_x = i32::MAX;
     let mut max_x = i32::MIN;
@@ -377,23 +281,16 @@ fn rasterize_string(font: &Font, s: &str, size: f32) -> RasterizedGlyph {
 
     for c in s.chars() {
         let (metrics, coverage) = font.rasterize(c, size);
-
         if !coverage.is_empty() {
-            let g_min_x = current_x.round() as i32 + metrics.xmin;
-            let g_max_x = g_min_x + metrics.width as i32;
-            let g_min_y = metrics.ymin;
-            let g_max_y = metrics.ymin + metrics.height as i32;
-
-            min_x = min_x.min(g_min_x);
-            max_x = max_x.max(g_max_x);
-            min_y = min_y.min(g_min_y);
-            max_y = max_y.max(g_max_y);
+            let glyph_x = current_x.round() as i32 + metrics.xmin;
+            min_x = min_x.min(glyph_x);
+            max_x = max_x.max(glyph_x + metrics.width as i32);
+            min_y = min_y.min(metrics.ymin);
+            max_y = max_y.max(metrics.ymin + metrics.height as i32);
         }
-
         glyphs.push((current_x, metrics, coverage));
         current_x += metrics.advance_width;
     }
-
     if glyphs.is_empty() || min_x == i32::MAX {
         return RasterizedGlyph::default();
     }
@@ -406,19 +303,16 @@ fn rasterize_string(font: &Font, s: &str, size: f32) -> RasterizedGlyph {
         if coverage.is_empty() {
             continue;
         }
-
         let start_x = (pos_x.round() as i32 + metrics.xmin - min_x) as usize;
         let start_y = (max_y - (metrics.ymin + metrics.height as i32)) as usize;
-
         for y in 0..metrics.height {
             for x in 0..metrics.width {
-                let src_idx = y * metrics.width + x;
                 let dst_idx = (start_y + y) * total_width + (start_x + x);
-                final_coverage[dst_idx] = final_coverage[dst_idx].max(coverage[src_idx]);
+                final_coverage[dst_idx] =
+                    final_coverage[dst_idx].max(coverage[y * metrics.width + x]);
             }
         }
     }
-
     RasterizedGlyph {
         width: total_width,
         height: total_height,
