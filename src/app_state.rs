@@ -31,8 +31,6 @@ const MARGIN_GAP: usize = 24;
 
 const BATTERY_SLOT_MAX_WIDTH: usize = 180;
 
-type DamageRect = (i32, i32, i32, i32);
-
 pub struct AppState {
     pub compositor: Option<WlCompositor>,
     pub shm: Option<WlShm>,
@@ -138,18 +136,13 @@ impl AppState {
             return;
         }
 
-        let damages = self.draw_bar();
-        if damages.is_empty() {
-            return;
-        }
+        let surface = self.wl_surface.clone();
+        let buffer = self.buffer.clone();
 
-        if let Some(surface) = &self.wl_surface
-            && let Some(buffer) = &self.buffer
+        if let (Some(surface), Some(buffer)) = (surface, buffer)
+            && self.draw_and_damage(&surface)
         {
-            surface.attach(Some(buffer), 0, 0);
-            for (x, y, w, h) in damages {
-                surface.damage_buffer(x, y, w, h);
-            }
+            surface.attach(Some(&buffer), 0, 0);
             surface.commit();
         }
     }
@@ -248,12 +241,6 @@ impl AppState {
         clipped_width
     }
 
-    fn push_damage(damage: &mut Vec<DamageRect>, x: usize, width: usize, height: usize) {
-        if width > 0 {
-            damage.push((x as i32, 0, width as i32, height as i32));
-        }
-    }
-
     fn draw_run(
         pixels: &mut [u8],
         stride: usize,
@@ -309,11 +296,9 @@ impl AppState {
         }
     }
 
-    fn draw_bar(&mut self) -> Vec<DamageRect> {
-        let mut damage = Vec::with_capacity(4);
-
+    fn draw_and_damage(&mut self, surface: &WlSurface) -> bool {
         if self.pixels.is_null() || self.width == 0 || self.height == 0 {
-            return damage;
+            return false;
         }
 
         let surface_width = self.width as usize;
@@ -354,8 +339,10 @@ impl AppState {
             || bat_est_m_total != self.last_bat_est_m;
 
         if !ws_changed && !clock_changed && !date_changed && !bat_changed {
-            return damage;
+            return false;
         }
+
+        let mut something_damaged = false;
 
         if let Some(glyphs) = &self.glyphs {
             let color_time = [0xf7, 0xa6, 0xcb, 0xff];
@@ -449,7 +436,9 @@ impl AppState {
                     }
                 }
 
-                Self::push_damage(&mut damage, 0, cleared_width, surface_height);
+                surface.damage_buffer(0, 0, cleared_width as i32, surface_height as i32);
+                something_damaged = true;
+
                 self.last_active_ws = active_ws;
                 self.last_workspaces = current_ws;
                 self.last_ws_render_width = current_ws_width;
@@ -488,7 +477,13 @@ impl AppState {
                     ],
                 );
 
-                Self::push_damage(&mut damage, date_slot_x, cleared_width, surface_height);
+                surface.damage_buffer(
+                    date_slot_x as i32,
+                    0,
+                    cleared_width as i32,
+                    surface_height as i32,
+                );
+                something_damaged = true;
 
                 self.last_day = day;
                 self.last_month = month;
@@ -533,7 +528,13 @@ impl AppState {
                     ],
                 );
 
-                Self::push_damage(&mut damage, time_slot_x, cleared_width, surface_height);
+                surface.damage_buffer(
+                    time_slot_x as i32,
+                    0,
+                    cleared_width as i32,
+                    surface_height as i32,
+                );
+                something_damaged = true;
 
                 self.last_h = h;
                 self.last_m = m;
@@ -578,7 +579,13 @@ impl AppState {
                     Self::draw_run(slice, stride, start_x, color_bat, &run);
                 }
 
-                Self::push_damage(&mut damage, bat_slot_x, cleared_width, surface_height);
+                surface.damage_buffer(
+                    bat_slot_x as i32,
+                    0,
+                    cleared_width as i32,
+                    surface_height as i32,
+                );
+                something_damaged = true;
 
                 self.last_bat_percent = bat_percent;
                 self.last_bat_state = bat_state;
@@ -588,7 +595,7 @@ impl AppState {
             self.force_full_redraw = false;
         }
 
-        damage
+        something_damaged
     }
 
     fn draw_glyph(
