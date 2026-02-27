@@ -67,7 +67,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut state = AppState::new(glyph_cache);
 
-    println!("Discovering Wayland globals...");
     event_queue.roundtrip(&mut state)?;
     if !state.has_required_globals() {
         eprintln!("Failed to bind essential Wayland globals.");
