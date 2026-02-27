@@ -7,10 +7,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use wayland_client::Connection;
 
 mod app_state;
+mod error;
 mod font_renderer;
 mod threads;
 
 use app_state::AppState;
+use error::LeanbarError;
 
 pub static WORKSPACES: [AtomicBool; 10] = [
     AtomicBool::new(false),
@@ -39,7 +41,7 @@ pub fn ping_main_thread(fd: &OwnedFd) {
     let _ = write(fd, &1u64.to_ne_bytes());
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), LeanbarError> {
     let args: Vec<String> = std::env::args().collect();
     if font_renderer::maybe_run_builder_mode(&args)? {
         return Ok(());

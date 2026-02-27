@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
+use crate::error::LeanbarError;
+
 const ATLAS_MAGIC: &[u8; 5] = b"LBAT1"; // leanbar atlas v1
 const GLYPH_COUNT: usize = 19;
 
@@ -34,7 +36,7 @@ pub struct GlyphCache {
 }
 
 impl GlyphCache {
-    pub fn load_or_build(font_path: &str, size: f32) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_or_build(font_path: &str, size: f32) -> Result<Self, LeanbarError> {
         let atlas_path = atlas_cache_path(font_path, size)?;
         if let Ok(cache) = Self::load_from_atlas(font_path, size, &atlas_path) {
             println!("[FontAtlas] cache hit: {}", atlas_path.display());
@@ -45,9 +47,9 @@ impl GlyphCache {
         Self::load_from_atlas(font_path, size, &atlas_path)
     }
 
-    fn from_font(font_path: &str, size: f32) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_font(font_path: &str, size: f32) -> Result<Self, LeanbarError> {
         let font = Font::from_bytes(fs::read(font_path)?, FontSettings::default())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| LeanbarError::Font(e.to_string()))?;
         let numbers: [RasterizedGlyph; 10] =
             std::array::from_fn(|i| rasterize_char(&font, (b'0' + i as u8) as char, size));
 
@@ -72,9 +74,13 @@ impl GlyphCache {
         })
     }
 
-    fn from_vec(all: Vec<RasterizedGlyph>) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_vec(all: Vec<RasterizedGlyph>) -> Result<Self, LeanbarError> {
         if all.len() != GLYPH_COUNT {
-            return Err(format!("expected {} glyphs, got {}", GLYPH_COUNT, all.len()).into());
+            return Err(LeanbarError::Atlas(format!(
+                "expected {} glyphs, got {}",
+                GLYPH_COUNT,
+                all.len()
+            )));
         }
         let mut it = all.into_iter();
         let numbers: [RasterizedGlyph; 10] = std::array::from_fn(|_| it.next().unwrap());
@@ -105,7 +111,7 @@ impl GlyphCache {
         font_path: &str,
         size: f32,
         target_path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), LeanbarError> {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -131,27 +137,27 @@ impl GlyphCache {
         expected_path: &str,
         expected_size: f32,
         atlas_path: &Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, LeanbarError> {
         let bytes = fs::read(atlas_path)?;
         let mut cursor = bytes.as_slice();
 
         if take(&mut cursor, ATLAS_MAGIC.len())? != ATLAS_MAGIC {
-            return Err("invalid atlas magic".into());
+            return Err(LeanbarError::Atlas("invalid atlas magic".into()));
         }
 
         let path_len = u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?) as usize;
         if String::from_utf8(take(&mut cursor, path_len)?.to_vec())? != expected_path {
-            return Err("path mismatch".into());
+            return Err(LeanbarError::Atlas("path mismatch".into()));
         }
 
         let secs = u64::from_le_bytes(take(&mut cursor, 8)?.try_into()?);
         let nanos = u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?);
         if font_mtime(expected_path)? != (secs, nanos) {
-            return Err("mtime mismatch".into());
+            return Err(LeanbarError::Atlas("mtime mismatch".into()));
         }
 
         if u32::from_le_bytes(take(&mut cursor, 4)?.try_into()?) != expected_size.to_bits() {
-            return Err("size mismatch".into());
+            return Err(LeanbarError::Atlas("size mismatch".into()));
         }
 
         let mut glyphs = Vec::with_capacity(GLYPH_COUNT);
@@ -193,13 +199,20 @@ impl GlyphCache {
     }
 }
 
-pub fn maybe_run_builder_mode(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
+pub fn maybe_run_builder_mode(args: &[String]) -> Result<bool, LeanbarError> {
     if args.get(1).map(String::as_str) != Some("--build-font-atlas") {
         return Ok(false);
     }
-    let font_path = args.get(2).ok_or("missing font path")?;
-    let size: f32 = args.get(3).ok_or("missing size")?.parse()?;
-    let atlas_path = args.get(4).ok_or("missing atlas path")?;
+    let font_path = args
+        .get(2)
+        .ok_or_else(|| LeanbarError::Atlas("missing font path".into()))?;
+    let size: f32 = args
+        .get(3)
+        .ok_or_else(|| LeanbarError::Atlas("missing size".into()))?
+        .parse()?;
+    let atlas_path = args
+        .get(4)
+        .ok_or_else(|| LeanbarError::Atlas("missing atlas path".into()))?;
 
     GlyphCache::from_font(font_path, size)?.write_atlas(font_path, size, Path::new(atlas_path))?;
     Ok(true)
@@ -209,7 +222,7 @@ fn build_atlas_with_helper(
     font_path: &str,
     size: f32,
     atlas_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), LeanbarError> {
     if let Some(parent) = atlas_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -223,16 +236,20 @@ fn build_atlas_with_helper(
         .status()?;
 
     if !status.success() {
-        return Err("font atlas helper process failed".into());
+        return Err(LeanbarError::Atlas(
+            "font atlas helper process failed".into(),
+        ));
     }
 
     Ok(())
 }
 
-fn atlas_cache_path(font_path: &str, size: f32) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn atlas_cache_path(font_path: &str, size: f32) -> Result<PathBuf, LeanbarError> {
     let cache_root = env::var("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .or_else(|_| env::var("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+        .or_else(|_| env::var("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .map_err(|_| LeanbarError::NoHome)?;
+
     let mut hasher = DefaultHasher::new();
     font_path.hash(&mut hasher);
     let name = Path::new(font_path)
@@ -247,14 +264,17 @@ fn atlas_cache_path(font_path: &str, size: f32) -> Result<PathBuf, Box<dyn std::
     )))
 }
 
-fn font_mtime(path: &str) -> Result<(u64, u32), Box<dyn std::error::Error>> {
-    let dur = fs::metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?;
+fn font_mtime(path: &str) -> Result<(u64, u32), LeanbarError> {
+    let dur = fs::metadata(path)?
+        .modified()?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| LeanbarError::Atlas(format!("mtime before epoch: {}", e)))?;
     Ok((dur.as_secs(), dur.subsec_nanos()))
 }
 
-fn take<'a>(cursor: &mut &'a [u8], n: usize) -> Result<&'a [u8], Box<dyn std::error::Error>> {
+fn take<'a>(cursor: &mut &'a [u8], n: usize) -> Result<&'a [u8], LeanbarError> {
     if cursor.len() < n {
-        return Err("unexpected end of file".into());
+        return Err(LeanbarError::Atlas("unexpected end of file".into()));
     }
     let (head, tail) = cursor.split_at(n);
     *cursor = tail;

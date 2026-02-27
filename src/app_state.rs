@@ -21,7 +21,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 
 use crate::{
     ACTIVE_WORKSPACE, BATTERY_ESTIMATE_M, BATTERY_PERCENT, BATTERY_STATE, DATE_DAY, DATE_MONTH,
-    DATE_YEAR, TIME_HOURS, TIME_MINUTES, WORKSPACES, font_renderer,
+    DATE_YEAR, TIME_HOURS, TIME_MINUTES, WORKSPACES, error::LeanbarError, font_renderer,
 };
 
 const BAR_HEIGHT: usize = 28;
@@ -95,15 +95,15 @@ impl AppState {
         self.compositor.is_some() && self.shm.is_some() && self.layer_shell.is_some()
     }
 
-    pub fn initialize_layer_surface(
-        &mut self,
-        qh: &QueueHandle<Self>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let compositor = self.compositor.as_ref().ok_or("missing wl_compositor")?;
+    pub fn initialize_layer_surface(&mut self, qh: &QueueHandle<Self>) -> Result<(), LeanbarError> {
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or_else(|| LeanbarError::Wayland("missing wl_compositor".into()))?;
         let layer_shell = self
             .layer_shell
             .as_ref()
-            .ok_or("missing zwlr_layer_shell_v1")?;
+            .ok_or_else(|| LeanbarError::Wayland("missing zwlr_layer_shell_v1".into()))?;
 
         let wl_surface = compositor.create_surface(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
