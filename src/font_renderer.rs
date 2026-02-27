@@ -29,6 +29,9 @@ pub struct GlyphCache {
     pub plus: RasterizedGlyph,
     pub minus: RasterizedGlyph,
     pub full: RasterizedGlyph,
+
+    pub max_digit_width: usize,
+    pub max_ampm_width: usize,
 }
 
 impl GlyphCache {
@@ -70,6 +73,9 @@ impl GlyphCache {
         let minus = rasterize_char(&font, '-', size);
         let full = rasterize_string(&font, "Full", size);
 
+        let max_digit_width = numbers.iter().map(|g| g.width).max().unwrap_or(0);
+        let max_ampm_width = am.width.max(pm.width);
+
         Ok(GlyphCache {
             numbers,
             am,
@@ -81,6 +87,8 @@ impl GlyphCache {
             plus,
             minus,
             full,
+            max_digit_width,
+            max_ampm_width,
         })
     }
 
@@ -109,6 +117,9 @@ impl GlyphCache {
             .try_into()
             .map_err(|_| "invalid number glyph count")?;
 
+        let max_digit_width = numbers.iter().map(|g| g.width).max().unwrap_or(0);
+        let max_ampm_width = am.width.max(pm.width);
+
         Ok(GlyphCache {
             numbers,
             am,
@@ -120,6 +131,8 @@ impl GlyphCache {
             plus,
             minus,
             full,
+            max_digit_width,
+            max_ampm_width,
         })
     }
 

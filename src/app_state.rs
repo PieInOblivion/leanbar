@@ -351,17 +351,14 @@ impl AppState {
             let color_date = [0xec, 0xc7, 0x74, 0xff];
             let color_bat = [0xa1, 0xe3, 0xa6, 0xff];
 
-            let max_digit_width = glyphs.numbers.iter().map(|g| g.width).max().unwrap_or(0);
-            let max_ampm_width = glyphs.am.width.max(glyphs.pm.width);
-
             let screen_center = surface_width / 2;
 
             // Slots define clear/damage areas
-            let date_slot_width = (max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
-            let time_slot_width = (max_digit_width * 4)
+            let date_slot_width = (glyphs.max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
+            let time_slot_width = (glyphs.max_digit_width * 4)
                 + glyphs.colon.width
                 + glyphs.space.width
-                + max_ampm_width
+                + glyphs.max_ampm_width
                 + 6;
 
             let date_slot_x = screen_center
