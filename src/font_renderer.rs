@@ -354,36 +354,61 @@ fn rasterize_char(font: &Font, c: char, size: f32) -> RasterizedGlyph {
 }
 
 fn rasterize_string(font: &Font, s: &str, size: f32) -> RasterizedGlyph {
-    let mut total_width = 0;
-    let mut max_height = 0;
     let mut glyphs = Vec::new();
+    let mut current_x = 0.0_f32;
+
+    let mut min_x = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut min_y = i32::MAX;
+    let mut max_y = i32::MIN;
 
     for c in s.chars() {
         let (metrics, coverage) = font.rasterize(c, size);
-        glyphs.push((metrics, coverage));
-        total_width += metrics.width;
-        if metrics.height > max_height {
-            max_height = metrics.height;
+
+        if !coverage.is_empty() {
+            let g_min_x = current_x.round() as i32 + metrics.xmin;
+            let g_max_x = g_min_x + metrics.width as i32;
+            let g_min_y = metrics.ymin;
+            let g_max_y = metrics.ymin + metrics.height as i32;
+
+            min_x = min_x.min(g_min_x);
+            max_x = max_x.max(g_max_x);
+            min_y = min_y.min(g_min_y);
+            max_y = max_y.max(g_max_y);
         }
+
+        glyphs.push((current_x, metrics, coverage));
+        current_x += metrics.advance_width;
     }
 
-    let mut final_coverage = vec![0; total_width * max_height];
-    let mut current_x = 0;
+    if glyphs.is_empty() || min_x == i32::MAX {
+        return RasterizedGlyph::default();
+    }
 
-    for (metrics, coverage) in glyphs {
+    let total_width = (max_x - min_x) as usize;
+    let total_height = (max_y - min_y) as usize;
+    let mut final_coverage = vec![0; total_width * total_height];
+
+    for (pos_x, metrics, coverage) in glyphs {
+        if coverage.is_empty() {
+            continue;
+        }
+
+        let start_x = (pos_x.round() as i32 + metrics.xmin - min_x) as usize;
+        let start_y = (max_y - (metrics.ymin + metrics.height as i32)) as usize;
+
         for y in 0..metrics.height {
             for x in 0..metrics.width {
                 let src_idx = y * metrics.width + x;
-                let dst_idx = y * total_width + current_x + x;
-                final_coverage[dst_idx] = coverage[src_idx];
+                let dst_idx = (start_y + y) * total_width + (start_x + x);
+                final_coverage[dst_idx] = final_coverage[dst_idx].max(coverage[src_idx]);
             }
         }
-        current_x += metrics.width;
     }
 
     RasterizedGlyph {
         width: total_width,
-        height: max_height,
+        height: total_height,
         coverage: final_coverage,
     }
 }
