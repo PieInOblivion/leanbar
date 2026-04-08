@@ -414,7 +414,8 @@ impl AppState {
                 } else {
                     COLOR_WS_OPEN
                 };
-                pb.draw_num_simple(&mut current_x, glyphs, ws_num as u8, color, 10);
+                pb.draw_num_simple(&mut current_x, glyphs, ws_num as u8, color, 1);
+                current_x += 9;
             }
         }
 
