@@ -62,29 +62,30 @@ pub fn start(wake_fd: OwnedFd) {
 
 fn update_battery_state() -> bool {
     let mut changed = false;
+    let mut capacity: u8 = 100;
+    let mut state: u8 = 0;
 
-    // Helper to read sysfs values
-    let read_sysfs = |path: &str| -> Option<String> {
-        fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-    };
-
-    let read_sysfs_u32 =
-        |path: &str| -> Option<u32> { read_sysfs(path).and_then(|s| s.parse().ok()) };
-
-    let capacity = read_sysfs_u32("/sys/class/power_supply/BAT0/capacity").unwrap_or(100) as u8;
+    // Read capacity
+    if let Ok(c_str) = fs::read_to_string("/sys/class/power_supply/BAT0/capacity") {
+        if let Ok(c) = c_str.trim().parse::<u8>() {
+            capacity = c;
+        }
+    }
     if BATTERY_PERCENT.load(Ordering::Acquire) != capacity {
         BATTERY_PERCENT.store(capacity, Ordering::Release);
         changed = true;
     }
 
-    let status_str = read_sysfs("/sys/class/power_supply/BAT0/status").unwrap_or_default();
-    let state = match status_str.as_str() {
-        "Discharging" => 1,
-        "Charging" => 2,
-        "Full" => 3,
-        _ => 0, // Unknown or Not charging
-    };
-
+    // Read status
+    if let Ok(s_str) = fs::read_to_string("/sys/class/power_supply/BAT0/status") {
+        let s = match s_str.trim() {
+            "Discharging" => 1,
+            "Charging" => 2,
+            "Full" => 3,
+            _ => 0,
+        };
+        state = s;
+    }
     if BATTERY_STATE.load(Ordering::Acquire) != state {
         BATTERY_STATE.store(state, Ordering::Release);
         changed = true;
@@ -92,27 +93,32 @@ fn update_battery_state() -> bool {
 
     // Calculate estimate
     let mut total_minutes = 0;
-
     if state == 1 || state == 2 {
-        // Discharging or Charging
-        let current_now = read_sysfs_u32("/sys/class/power_supply/BAT0/current_now")
-            .or_else(|| read_sysfs_u32("/sys/class/power_supply/BAT0/power_now"))
-            .unwrap_or(0);
+        let mut current_now = 0;
+        if let Ok(s) = fs::read_to_string("/sys/class/power_supply/BAT0/current_now")
+            .or_else(|_| fs::read_to_string("/sys/class/power_supply/BAT0/power_now"))
+        {
+            current_now = s.trim().parse().unwrap_or(0);
+        }
 
         if current_now > 0 {
-            let charge_now = read_sysfs_u32("/sys/class/power_supply/BAT0/charge_now")
-                .or_else(|| read_sysfs_u32("/sys/class/power_supply/BAT0/energy_now"))
-                .unwrap_or(0);
+            let mut charge_now = 0;
+            if let Ok(s) = fs::read_to_string("/sys/class/power_supply/BAT0/charge_now")
+                .or_else(|_| fs::read_to_string("/sys/class/power_supply/BAT0/energy_now"))
+            {
+                charge_now = s.trim().parse().unwrap_or(0);
+            }
 
             if state == 1 {
-                // Discharging
                 let hours = charge_now as f64 / current_now as f64;
                 total_minutes = (hours * 60.0) as u16;
             } else if state == 2 {
-                // Charging
-                let charge_full = read_sysfs_u32("/sys/class/power_supply/BAT0/charge_full")
-                    .or_else(|| read_sysfs_u32("/sys/class/power_supply/BAT0/energy_full"))
-                    .unwrap_or(charge_now);
+                let mut charge_full = charge_now;
+                if let Ok(s) = fs::read_to_string("/sys/class/power_supply/BAT0/charge_full")
+                    .or_else(|_| fs::read_to_string("/sys/class/power_supply/BAT0/energy_full"))
+                {
+                    charge_full = s.trim().parse().unwrap_or(charge_now);
+                }
 
                 if charge_full > charge_now {
                     let diff = charge_full - charge_now;

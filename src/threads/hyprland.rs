@@ -28,17 +28,14 @@ pub fn start(wake_fd: OwnedFd) {
             match UnixStream::connect(&socket_path) {
                 Ok(stream) => {
                     println!("[Hyprland Thread] Connected to IPC socket.");
-                    let reader = BufReader::new(stream);
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::with_capacity(128);
 
-                    for line in reader.lines() {
-                        match line {
-                            Ok(event) => handle_event(&event, &wake_fd),
-                            Err(e) => {
-                                eprintln!("[Hyprland Thread] Socket read error: {}", e);
-                                break; // Break and reconnect
-                            }
-                        }
+                    while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
+                        handle_event(&line, &wake_fd);
+                        line.clear();
                     }
+                    println!("[Hyprland Thread] Connection closed.");
                 }
                 Err(e) => {
                     eprintln!(
