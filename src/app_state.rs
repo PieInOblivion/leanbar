@@ -39,6 +39,46 @@ struct PixelBuffer<'a> {
     height: usize,
 }
 
+struct DrawCache {
+    active_ws: u8,
+    workspaces: [bool; 10],
+    ws_render_width: usize,
+    minute: u8,
+    hour: u8,
+    day: u8,
+    month: u8,
+    year: u8,
+    bat_percent: u8,
+    bat_state: u8,
+    bat_est_min: u16,
+}
+
+impl Default for DrawCache {
+    fn default() -> Self {
+        Self {
+            active_ws: 255,
+            workspaces: [false; 10],
+            ws_render_width: 0,
+            minute: 255,
+            hour: 255,
+            day: 255,
+            month: 255,
+            year: 255,
+            bat_percent: 255,
+            bat_state: 255,
+            bat_est_min: 65535,
+        }
+    }
+}
+
+struct BarLayout {
+    date_x: usize,
+    date_width: usize,
+    time_x: usize,
+    time_width: usize,
+    bat_x: usize,
+}
+
 impl<'a> PixelBuffer<'a> {
     fn new(pixels: &'a mut [u8], stride: usize, width: usize, height: usize) -> Self {
         Self {
@@ -156,17 +196,7 @@ pub struct AppState {
     pub configured: bool,
 
     pub force_full_redraw: bool,
-    pub last_active_ws: u8,
-    pub last_workspaces: [bool; 10],
-    pub last_ws_render_width: usize,
-    pub last_h: u8,
-    pub last_m: u8,
-    pub last_day: u8,
-    pub last_month: u8,
-    pub last_year: u8,
-    pub last_bat_percent: u8,
-    pub last_bat_state: u8,
-    pub last_bat_est_m: u16,
+    cache: DrawCache,
 
     pub glyphs: Option<font_renderer::GlyphCache>,
 }
@@ -186,17 +216,7 @@ impl AppState {
             height: 0,
             configured: false,
             force_full_redraw: true,
-            last_active_ws: 255,
-            last_workspaces: [false; 10],
-            last_ws_render_width: 0,
-            last_h: 255,
-            last_m: 255,
-            last_day: 255,
-            last_month: 255,
-            last_year: 255,
-            last_bat_percent: 255,
-            last_bat_state: 255,
-            last_bat_est_m: 65535,
+            cache: DrawCache::default(),
             glyphs,
         }
     }
@@ -265,10 +285,10 @@ impl AppState {
 
         let active_ws = ACTIVE_WORKSPACE.load(Ordering::Acquire);
         let mut current_ws = [false; 10];
-        let mut ws_changed = self.force_full_redraw || active_ws != self.last_active_ws;
+        let mut ws_changed = self.force_full_redraw || active_ws != self.cache.active_ws;
         for (i, ws) in WORKSPACES.iter().enumerate() {
             current_ws[i] = ws.load(Ordering::Acquire);
-            if current_ws[i] != self.last_workspaces[i] {
+            if current_ws[i] != self.cache.workspaces[i] {
                 ws_changed = true;
             }
         }
@@ -279,41 +299,45 @@ impl AppState {
         let month = DATE_MONTH.load(Ordering::Acquire);
         let year = DATE_YEAR.load(Ordering::Acquire);
 
-        let clock_changed = self.force_full_redraw || h != self.last_h || m != self.last_m;
+        let clock_changed =
+            self.force_full_redraw || h != self.cache.hour || m != self.cache.minute;
         let date_changed = self.force_full_redraw
-            || day != self.last_day
-            || month != self.last_month
-            || year != self.last_year;
+            || day != self.cache.day
+            || month != self.cache.month
+            || year != self.cache.year;
 
         let bat_percent = BATTERY_PERCENT.load(Ordering::Acquire);
         let bat_state = BATTERY_STATE.load(Ordering::Acquire);
         let bat_est_m_total = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
 
         let bat_changed = self.force_full_redraw
-            || bat_percent != self.last_bat_percent
-            || bat_state != self.last_bat_state
-            || bat_est_m_total != self.last_bat_est_m;
+            || bat_percent != self.cache.bat_percent
+            || bat_state != self.cache.bat_state
+            || bat_est_m_total != self.cache.bat_est_min;
 
         if !ws_changed && !clock_changed && !date_changed && !bat_changed {
             return false;
         }
 
-        let (date_slot_x, date_slot_width, time_slot_x, time_slot_width, bat_slot_x) = {
+        let layout = {
             let glyphs = self.glyphs.as_ref().unwrap();
             let screen_center = self.width as usize / 2;
-            let dsw = (glyphs.max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
-            let tsw = (glyphs.max_digit_width * 4)
+            let d_w = (glyphs.max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
+            let t_w = (glyphs.max_digit_width * 4)
                 + glyphs.colon.width
                 + glyphs.space.width
                 + glyphs.max_ampm_width
                 + 6;
 
-            let dsx = screen_center
-                .saturating_sub(MARGIN_GAP / 2)
-                .saturating_sub(dsw);
-            let tsx = screen_center + (MARGIN_GAP / 2);
-            let bsx = (self.width as usize).saturating_sub(BATTERY_SLOT_MAX_WIDTH);
-            (dsx, dsw, tsx, tsw, bsx)
+            BarLayout {
+                date_x: screen_center
+                    .saturating_sub(MARGIN_GAP / 2)
+                    .saturating_sub(d_w),
+                date_width: d_w,
+                time_x: screen_center + (MARGIN_GAP / 2),
+                time_width: t_w,
+                bat_x: (self.width as usize).saturating_sub(BATTERY_SLOT_MAX_WIDTH),
+            }
         };
 
         let stride = (self.width * 4) as usize;
@@ -328,35 +352,35 @@ impl AppState {
             }
         }
 
-        if date_changed && date_slot_x < pb.width {
-            self.draw_date(&mut pb, date_slot_x, date_slot_width);
+        if date_changed && layout.date_x < pb.width {
+            self.draw_date(&mut pb, layout.date_x, layout.date_width);
             if let Some(surface) = &self.wl_surface {
                 surface.damage_buffer(
-                    date_slot_x as i32,
+                    layout.date_x as i32,
                     0,
-                    date_slot_width as i32,
+                    layout.date_width as i32,
                     self.height as i32,
                 );
             }
         }
 
-        if clock_changed && time_slot_x < pb.width {
-            self.draw_clock(&mut pb, time_slot_x, time_slot_width);
+        if clock_changed && layout.time_x < pb.width {
+            self.draw_clock(&mut pb, layout.time_x, layout.time_width);
             if let Some(surface) = &self.wl_surface {
                 surface.damage_buffer(
-                    time_slot_x as i32,
+                    layout.time_x as i32,
                     0,
-                    time_slot_width as i32,
+                    layout.time_width as i32,
                     self.height as i32,
                 );
             }
         }
 
-        if bat_changed && bat_slot_x < pb.width && bat_state != 255 {
-            self.draw_battery(&mut pb, bat_slot_x);
+        if bat_changed && layout.bat_x < pb.width && bat_state != 255 {
+            self.draw_battery(&mut pb, layout.bat_x);
             if let Some(surface) = &self.wl_surface {
                 surface.damage_buffer(
-                    bat_slot_x as i32,
+                    layout.bat_x as i32,
                     0,
                     BATTERY_SLOT_MAX_WIDTH as i32,
                     self.height as i32,
@@ -378,7 +402,7 @@ impl AppState {
 
         let current_ws_width = Self::workspace_content_width(glyphs, &current_ws, active_ws);
         let ws_clear_width =
-            (MARGIN_LEFT + current_ws_width.max(self.last_ws_render_width)).min(pb.width);
+            (MARGIN_LEFT + current_ws_width.max(self.cache.ws_render_width)).min(pb.width);
         pb.clear_rect(0, ws_clear_width);
 
         let mut current_x = MARGIN_LEFT;
@@ -394,9 +418,9 @@ impl AppState {
             }
         }
 
-        self.last_active_ws = active_ws;
-        self.last_workspaces = current_ws;
-        self.last_ws_render_width = current_ws_width;
+        self.cache.active_ws = active_ws;
+        self.cache.workspaces = current_ws;
+        self.cache.ws_render_width = current_ws_width;
         ws_clear_width
     }
 
@@ -421,9 +445,9 @@ impl AppState {
         cur_x += glyphs.slash.width + 1;
         pb.draw_num_pad2(&mut cur_x, glyphs, year, COLOR_DATE, 1, 0);
 
-        self.last_day = day;
-        self.last_month = month;
-        self.last_year = year;
+        self.cache.day = day;
+        self.cache.month = month;
+        self.cache.year = year;
     }
 
     fn draw_clock(&mut self, pb: &mut PixelBuffer, x: usize, width: usize) {
@@ -452,8 +476,8 @@ impl AppState {
         let ampm_y = (BAR_HEIGHT.saturating_sub(am_pm.height)) / 2;
         pb.draw_glyph(cur_x, ampm_y, am_pm, COLOR_TIME);
 
-        self.last_h = h;
-        self.last_m = m;
+        self.cache.hour = h;
+        self.cache.minute = m;
     }
 
     fn draw_battery(&mut self, pb: &mut PixelBuffer, x: usize) {
@@ -520,9 +544,9 @@ impl AppState {
             pb.draw_num_pad2(&mut cur_x, glyphs, est_m, COLOR_BAT, 1, 0);
         }
 
-        self.last_bat_percent = bat_percent;
-        self.last_bat_state = bat_state;
-        self.last_bat_est_m = bat_est_m_total;
+        self.cache.bat_percent = bat_percent;
+        self.cache.bat_state = bat_state;
+        self.cache.bat_est_min = bat_est_m_total;
     }
 
     fn battery_content_width(
