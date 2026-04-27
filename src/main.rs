@@ -11,6 +11,7 @@ mod error;
 mod font_renderer;
 mod threads;
 
+// Colors are 0xAARRGGBB
 pub const COLOR_WS_FOCUSED: u32 = 0xffffffff;
 pub const COLOR_WS_OPEN: u32 = 0xffcba6f7;
 pub const COLOR_TIME: u32 = 0xffcba6f7;
