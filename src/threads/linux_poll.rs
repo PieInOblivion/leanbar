@@ -66,10 +66,10 @@ fn update_battery_state() -> bool {
     let mut state: u8 = 0;
 
     // Read capacity
-    if let Ok(c_str) = fs::read_to_string("/sys/class/power_supply/BAT0/capacity") {
-        if let Ok(c) = c_str.trim().parse::<u8>() {
-            capacity = c;
-        }
+    if let Ok(c_str) = fs::read_to_string("/sys/class/power_supply/BAT0/capacity")
+        && let Ok(c) = c_str.trim().parse::<u8>()
+    {
+        capacity = c;
     }
     if BATTERY_PERCENT.load(Ordering::Acquire) != capacity {
         BATTERY_PERCENT.store(capacity, Ordering::Release);

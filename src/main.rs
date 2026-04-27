@@ -11,11 +11,11 @@ mod error;
 mod font_renderer;
 mod threads;
 
-pub const COLOR_WS_FOCUSED: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
-pub const COLOR_WS_OPEN: [u8; 4] = [0xf7, 0xa6, 0xcb, 0xff];
-pub const COLOR_TIME: [u8; 4] = [0xf7, 0xa6, 0xcb, 0xff];
-pub const COLOR_DATE: [u8; 4] = [0xec, 0xc7, 0x74, 0xff];
-pub const COLOR_BAT: [u8; 4] = [0xa1, 0xe3, 0xa6, 0xff];
+pub const COLOR_WS_FOCUSED: u32 = 0xffffffff;
+pub const COLOR_WS_OPEN: u32 = 0xffcba6f7;
+pub const COLOR_TIME: u32 = 0xffcba6f7;
+pub const COLOR_DATE: u32 = 0xff74c7ec;
+pub const COLOR_BAT: u32 = 0xffa6e3a1;
 
 use app_state::AppState;
 use error::LeanbarError;

@@ -33,8 +33,7 @@ const MARGIN_GAP: usize = 24;
 const BATTERY_SLOT_MAX_WIDTH: usize = 180;
 
 struct PixelBuffer<'a> {
-    pixels: &'a mut [u8],
-    stride: usize,
+    pixels: &'a mut [u32],
     width: usize,
     height: usize,
 }
@@ -71,19 +70,10 @@ impl Default for DrawCache {
     }
 }
 
-struct BarLayout {
-    date_x: usize,
-    date_width: usize,
-    time_x: usize,
-    time_width: usize,
-    bat_x: usize,
-}
-
 impl<'a> PixelBuffer<'a> {
-    fn new(pixels: &'a mut [u8], stride: usize, width: usize, height: usize) -> Self {
+    fn new(pixels: &'a mut [u32], width: usize, height: usize) -> Self {
         Self {
             pixels,
-            stride,
             width,
             height,
         }
@@ -95,9 +85,8 @@ impl<'a> PixelBuffer<'a> {
         }
         let actual_w = width.min(self.width - x);
         for y in 0..self.height {
-            let start = y * self.stride + x * 4;
-            let end = start + actual_w * 4;
-            self.pixels[start..end].fill(0);
+            let start = y * self.width + x;
+            self.pixels[start..start + actual_w].fill(0);
         }
     }
 
@@ -106,16 +95,22 @@ impl<'a> PixelBuffer<'a> {
         x: usize,
         y: usize,
         glyph: &font_renderer::RasterizedGlyph,
-        color: [u8; 4],
+        color: u32,
     ) {
         if glyph.coverage.is_empty() {
             return;
         }
+        let ca = (color >> 24) & 0xFF;
+        let cr = (color >> 16) & 0xFF;
+        let cg = (color >> 8) & 0xFF;
+        let cb = color & 0xFF;
+
         for gy in 0..glyph.height {
             let py = y + gy;
             if py >= self.height {
                 continue;
             }
+            let row_idx = py * self.width;
             for gx in 0..glyph.width {
                 let px = x + gx;
                 if px >= self.width {
@@ -127,57 +122,76 @@ impl<'a> PixelBuffer<'a> {
                     continue;
                 }
 
-                let dst_idx = py * self.stride + px * 4;
-                let a = (color[3] as u32 * alpha) / 255;
-                let b = (color[0] as u32 * a) / 255;
-                let g = (color[1] as u32 * a) / 255;
-                let r = (color[2] as u32 * a) / 255;
+                let a = (ca * alpha) / 255;
+                let r = (cr * a) / 255;
+                let g = (cg * a) / 255;
+                let b = (cb * a) / 255;
 
-                self.pixels[dst_idx] = b as u8;
-                self.pixels[dst_idx + 1] = g as u8;
-                self.pixels[dst_idx + 2] = r as u8;
-                self.pixels[dst_idx + 3] = a as u8;
+                self.pixels[row_idx + px] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }
 
-    fn draw_num_simple(
-        &mut self,
-        x: &mut usize,
+    fn measure_num(
         glyphs: &font_renderer::GlyphCache,
-        num: u8,
-        color: [u8; 4],
+        num: u32,
+        pad: usize,
         spacing: usize,
-    ) {
-        if num >= 10 {
-            let d = (num / 10) as usize;
-            let g = &glyphs.numbers[d];
-            self.draw_glyph(*x, (BAR_HEIGHT.saturating_sub(g.height)) / 2, g, color);
-            *x += g.width + spacing;
+    ) -> usize {
+        let mut w = 0;
+        let mut temp = num;
+        let mut len = 0;
+        if temp == 0 {
+            len = 1;
+            w += glyphs.numbers[0].width + spacing;
+        } else {
+            while temp > 0 {
+                w += glyphs.numbers[(temp % 10) as usize].width + spacing;
+                temp /= 10;
+                len += 1;
+            }
         }
-        let d = (num % 10) as usize;
-        let g = &glyphs.numbers[d];
-        self.draw_glyph(*x, (BAR_HEIGHT.saturating_sub(g.height)) / 2, g, color);
-        *x += g.width + spacing;
+        while len < pad {
+            w += glyphs.numbers[0].width + spacing;
+            len += 1;
+        }
+        w.saturating_sub(spacing)
     }
 
-    fn draw_num_pad2(
+    fn draw_num(
         &mut self,
         x: &mut usize,
         glyphs: &font_renderer::GlyphCache,
-        num: u8,
-        color: [u8; 4],
-        inner_spacing: usize,
-        outer_spacing: usize,
+        num: u32,
+        color: u32,
+        pad: usize,
+        spacing: usize,
     ) {
-        let d1 = (num / 10) as usize;
-        let d2 = (num % 10) as usize;
-        let g1 = &glyphs.numbers[d1];
-        let g2 = &glyphs.numbers[d2];
-        self.draw_glyph(*x, (BAR_HEIGHT.saturating_sub(g1.height)) / 2, g1, color);
-        *x += g1.width + inner_spacing;
-        self.draw_glyph(*x, (BAR_HEIGHT.saturating_sub(g2.height)) / 2, g2, color);
-        *x += g2.width + outer_spacing;
+        let mut s = [0u8; 11];
+        let mut len = 0;
+        let mut temp = num;
+        if temp == 0 {
+            s[0] = 0;
+            len = 1;
+        } else {
+            while temp > 0 {
+                s[len] = (temp % 10) as u8;
+                temp /= 10;
+                len += 1;
+            }
+        }
+        while len < pad {
+            s[len] = 0;
+            len += 1;
+        }
+        for i in (0..len).rev() {
+            let g = &glyphs.numbers[s[i] as usize];
+            self.draw_glyph(*x, (BAR_HEIGHT.saturating_sub(g.height)) / 2, g, color);
+            *x += g.width;
+            if i > 0 {
+                *x += spacing;
+            }
+        }
     }
 }
 
@@ -189,7 +203,7 @@ pub struct AppState {
     pub layer_surface: Option<ZwlrLayerSurfaceV1>,
     pub wl_surface: Option<WlSurface>,
     pub buffer: Option<WlBuffer>,
-    pub pixels: *mut u8,
+    pub pixels: *mut u32,
     pub pixels_len: usize,
     pub width: u32,
     pub height: u32,
@@ -262,24 +276,17 @@ impl AppState {
     }
 
     pub fn redraw_and_commit(&mut self) {
-        if !self.configured {
-            return;
-        }
-
-        if self.draw_and_damage() {
-            if let (Some(surface), Some(buffer)) = (&self.wl_surface, &self.buffer) {
-                surface.attach(Some(buffer), 0, 0);
-                surface.commit();
-            }
+        if self.configured
+            && self.draw_and_damage()
+            && let (Some(surface), Some(buffer)) = (&self.wl_surface, &self.buffer)
+        {
+            surface.attach(Some(buffer), 0, 0);
+            surface.commit();
         }
     }
 
     fn draw_and_damage(&mut self) -> bool {
-        if self.pixels.is_null() || self.width == 0 || self.height == 0 {
-            return false;
-        }
-
-        if self.glyphs.is_none() {
+        if self.pixels.is_null() || self.width == 0 || self.glyphs.is_none() {
             return false;
         }
 
@@ -288,9 +295,7 @@ impl AppState {
         let mut ws_changed = self.force_full_redraw || active_ws != self.cache.active_ws;
         for (i, ws) in WORKSPACES.iter().enumerate() {
             current_ws[i] = ws.load(Ordering::Acquire);
-            if current_ws[i] != self.cache.workspaces[i] {
-                ws_changed = true;
-            }
+            ws_changed |= current_ws[i] != self.cache.workspaces[i];
         }
 
         let h = TIME_HOURS.load(Ordering::Acquire);
@@ -298,6 +303,9 @@ impl AppState {
         let day = DATE_DAY.load(Ordering::Acquire);
         let month = DATE_MONTH.load(Ordering::Acquire);
         let year = DATE_YEAR.load(Ordering::Acquire);
+        let bat_p = BATTERY_PERCENT.load(Ordering::Acquire);
+        let bat_s = BATTERY_STATE.load(Ordering::Acquire);
+        let bat_e = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
 
         let clock_changed =
             self.force_full_redraw || h != self.cache.hour || m != self.cache.minute;
@@ -305,340 +313,194 @@ impl AppState {
             || day != self.cache.day
             || month != self.cache.month
             || year != self.cache.year;
-
-        let bat_percent = BATTERY_PERCENT.load(Ordering::Acquire);
-        let bat_state = BATTERY_STATE.load(Ordering::Acquire);
-        let bat_est_m_total = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
-
         let bat_changed = self.force_full_redraw
-            || bat_percent != self.cache.bat_percent
-            || bat_state != self.cache.bat_state
-            || bat_est_m_total != self.cache.bat_est_min;
+            || bat_p != self.cache.bat_percent
+            || bat_s != self.cache.bat_state
+            || bat_e != self.cache.bat_est_min;
 
         if !ws_changed && !clock_changed && !date_changed && !bat_changed {
             return false;
         }
 
-        let layout = {
-            let glyphs = self.glyphs.as_ref().unwrap();
-            let screen_center = self.width as usize / 2;
-            let d_w = (glyphs.max_digit_width * 6) + (glyphs.slash.width * 2) + 7;
-            let t_w = (glyphs.max_digit_width * 4)
+        let glyphs = self.glyphs.as_ref().unwrap();
+        let slice = unsafe {
+            std::slice::from_raw_parts_mut(self.pixels, (self.width * self.height) as usize)
+        };
+        let mut pb = PixelBuffer::new(slice, self.width as usize, self.height as usize);
+
+        if ws_changed {
+            let mut w = 0;
+            for (i, ws) in current_ws.iter().enumerate() {
+                if *ws || active_ws == (i + 1) as u8 {
+                    w += PixelBuffer::measure_num(glyphs, (i + 1) as u32, 1, 1) + 9;
+                }
+            }
+            let clear_w = (MARGIN_LEFT + w.max(self.cache.ws_render_width)).min(pb.width);
+            pb.clear_rect(0, clear_w);
+            let mut cur_x = MARGIN_LEFT;
+            for (i, ws) in current_ws.iter().enumerate() {
+                let num = (i + 1) as u8;
+                if *ws || active_ws == num {
+                    let color = if active_ws == num {
+                        COLOR_WS_FOCUSED
+                    } else {
+                        COLOR_WS_OPEN
+                    };
+                    pb.draw_num(&mut cur_x, glyphs, num as u32, color, 1, 1);
+                    cur_x += 10;
+                }
+            }
+            self.cache.active_ws = active_ws;
+            self.cache.workspaces = current_ws;
+            self.cache.ws_render_width = w;
+            self.damage(0, clear_w);
+        }
+
+        let center = pb.width / 2;
+        if date_changed {
+            let dw_max = (glyphs.max_digit_width * 6) + (glyphs.slash.width * 2) + 10;
+            let dx_stable = center.saturating_sub(MARGIN_GAP / 2).saturating_sub(dw_max);
+            pb.clear_rect(dx_stable, dw_max);
+
+            let dw = PixelBuffer::measure_num(glyphs, day as u32, 2, 1)
+                + 1
+                + glyphs.slash.width
+                + 1
+                + PixelBuffer::measure_num(glyphs, month as u32, 2, 1)
+                + 1
+                + glyphs.slash.width
+                + 1
+                + PixelBuffer::measure_num(glyphs, year as u32, 2, 0);
+            let mut cur_x = center.saturating_sub(MARGIN_GAP / 2).saturating_sub(dw);
+
+            let col = COLOR_DATE;
+            pb.draw_num(&mut cur_x, glyphs, day as u32, col, 2, 1);
+            cur_x += 1;
+            pb.draw_glyph(
+                cur_x,
+                (BAR_HEIGHT - glyphs.slash.height) / 2,
+                &glyphs.slash,
+                col,
+            );
+            cur_x += glyphs.slash.width + 1;
+            pb.draw_num(&mut cur_x, glyphs, month as u32, col, 2, 1);
+            cur_x += 1;
+            pb.draw_glyph(
+                cur_x,
+                (BAR_HEIGHT - glyphs.slash.height) / 2,
+                &glyphs.slash,
+                col,
+            );
+            cur_x += glyphs.slash.width + 1;
+            pb.draw_num(&mut cur_x, glyphs, year as u32, col, 2, 0);
+            self.cache.day = day;
+            self.cache.month = month;
+            self.cache.year = year;
+            self.damage(dx_stable, dw_max);
+        }
+
+        if clock_changed {
+            let tw_max = (glyphs.max_digit_width * 4)
                 + glyphs.colon.width
                 + glyphs.space.width
                 + glyphs.max_ampm_width
-                + 6;
-
-            BarLayout {
-                date_x: screen_center
-                    .saturating_sub(MARGIN_GAP / 2)
-                    .saturating_sub(d_w),
-                date_width: d_w,
-                time_x: screen_center + (MARGIN_GAP / 2),
-                time_width: t_w,
-                bat_x: (self.width as usize).saturating_sub(BATTERY_SLOT_MAX_WIDTH),
-            }
-        };
-
-        let stride = (self.width * 4) as usize;
-        let len = (self.width * self.height * 4) as usize;
-        let slice = unsafe { std::slice::from_raw_parts_mut(self.pixels, len) };
-        let mut pb = PixelBuffer::new(slice, stride, self.width as usize, self.height as usize);
-
-        if ws_changed {
-            let cleared_width = self.draw_workspaces(&mut pb);
-            if let Some(surface) = &self.wl_surface {
-                surface.damage_buffer(0, 0, cleared_width as i32, self.height as i32);
-            }
+                + 10;
+            let tx = center + (MARGIN_GAP / 2);
+            pb.clear_rect(tx, tw_max);
+            let mut cur_x = tx;
+            let col = COLOR_TIME;
+            let dh = if h == 0 {
+                12
+            } else if h > 12 {
+                h - 12
+            } else {
+                h
+            };
+            pb.draw_num(&mut cur_x, glyphs, dh as u32, col, 2, 1);
+            cur_x += 1;
+            pb.draw_glyph(
+                cur_x,
+                (BAR_HEIGHT - glyphs.colon.height) / 2,
+                &glyphs.colon,
+                col,
+            );
+            cur_x += glyphs.colon.width + 1;
+            pb.draw_num(&mut cur_x, glyphs, m as u32, col, 2, 1);
+            cur_x += 1;
+            cur_x += glyphs.space.width + 1;
+            let ap = if h >= 12 { &glyphs.pm } else { &glyphs.am };
+            pb.draw_glyph(cur_x, (BAR_HEIGHT - ap.height) / 2, ap, col);
+            self.cache.hour = h;
+            self.cache.minute = m;
+            self.damage(tx, tw_max);
         }
 
-        if date_changed && layout.date_x < pb.width {
-            self.draw_date(&mut pb, layout.date_x, layout.date_width);
-            if let Some(surface) = &self.wl_surface {
-                surface.damage_buffer(
-                    layout.date_x as i32,
-                    0,
-                    layout.date_width as i32,
-                    self.height as i32,
+        if bat_changed && bat_s != 255 {
+            let bx = pb.width.saturating_sub(BATTERY_SLOT_MAX_WIDTH);
+            pb.clear_rect(bx, BATTERY_SLOT_MAX_WIDTH);
+            let col = COLOR_BAT;
+            if bat_s == 3 {
+                let cur_x = pb.width.saturating_sub(MARGIN_RIGHT + glyphs.full.width);
+                pb.draw_glyph(
+                    cur_x,
+                    (BAR_HEIGHT - glyphs.full.height) / 2,
+                    &glyphs.full,
+                    col,
                 );
-            }
-        }
-
-        if clock_changed && layout.time_x < pb.width {
-            self.draw_clock(&mut pb, layout.time_x, layout.time_width);
-            if let Some(surface) = &self.wl_surface {
-                surface.damage_buffer(
-                    layout.time_x as i32,
-                    0,
-                    layout.time_width as i32,
-                    self.height as i32,
+            } else {
+                let bw = PixelBuffer::measure_num(glyphs, bat_p as u32, 1, 1)
+                    + 1
+                    + glyphs.percent.width
+                    + 3
+                    + glyphs.plus.width
+                    + 3
+                    + PixelBuffer::measure_num(glyphs, (bat_e / 60) as u32, 2, 1)
+                    + 1
+                    + glyphs.colon.width
+                    + 1
+                    + PixelBuffer::measure_num(glyphs, (bat_e % 60) as u32, 2, 0);
+                let mut cur_x = pb.width.saturating_sub(MARGIN_RIGHT + bw);
+                pb.draw_num(&mut cur_x, glyphs, bat_p as u32, col, 1, 1);
+                cur_x += 1;
+                pb.draw_glyph(
+                    cur_x,
+                    (BAR_HEIGHT - glyphs.percent.height) / 2,
+                    &glyphs.percent,
+                    col,
                 );
-            }
-        }
-
-        if bat_changed && layout.bat_x < pb.width && bat_state != 255 {
-            self.draw_battery(&mut pb, layout.bat_x);
-            if let Some(surface) = &self.wl_surface {
-                surface.damage_buffer(
-                    layout.bat_x as i32,
-                    0,
-                    BATTERY_SLOT_MAX_WIDTH as i32,
-                    self.height as i32,
+                cur_x += glyphs.percent.width + 3;
+                let sg = if bat_s == 2 {
+                    &glyphs.plus
+                } else {
+                    &glyphs.minus
+                };
+                pb.draw_glyph(cur_x, (BAR_HEIGHT - sg.height) / 2, sg, col);
+                cur_x += sg.width + 3;
+                pb.draw_num(&mut cur_x, glyphs, (bat_e / 60) as u32, col, 2, 1);
+                cur_x += 1;
+                pb.draw_glyph(
+                    cur_x,
+                    (BAR_HEIGHT - glyphs.colon.height) / 2,
+                    &glyphs.colon,
+                    col,
                 );
+                cur_x += glyphs.colon.width + 1;
+                pb.draw_num(&mut cur_x, glyphs, (bat_e % 60) as u32, col, 2, 0);
             }
+            self.cache.bat_percent = bat_p;
+            self.cache.bat_state = bat_s;
+            self.cache.bat_est_min = bat_e;
+            self.damage(bx, BATTERY_SLOT_MAX_WIDTH);
         }
 
         self.force_full_redraw = false;
         true
     }
 
-    fn draw_workspaces(&mut self, pb: &mut PixelBuffer) -> usize {
-        let glyphs = self.glyphs.as_ref().unwrap();
-        let active_ws = ACTIVE_WORKSPACE.load(Ordering::Acquire);
-        let mut current_ws = [false; 10];
-        for (i, ws) in WORKSPACES.iter().enumerate() {
-            current_ws[i] = ws.load(Ordering::Acquire);
+    fn damage(&self, x: usize, width: usize) {
+        if let Some(surface) = &self.wl_surface {
+            surface.damage_buffer(x as i32, 0, width as i32, self.height as i32);
         }
-
-        let current_ws_width = Self::workspace_content_width(glyphs, &current_ws, active_ws);
-        let ws_clear_width =
-            (MARGIN_LEFT + current_ws_width.max(self.cache.ws_render_width)).min(pb.width);
-        pb.clear_rect(0, ws_clear_width);
-
-        let mut current_x = MARGIN_LEFT;
-        for (i, ws) in current_ws.iter().enumerate() {
-            let ws_num = i + 1;
-            if *ws || active_ws == ws_num as u8 {
-                let color = if active_ws == ws_num as u8 {
-                    COLOR_WS_FOCUSED
-                } else {
-                    COLOR_WS_OPEN
-                };
-                pb.draw_num_simple(&mut current_x, glyphs, ws_num as u8, color, 1);
-                current_x += 9;
-            }
-        }
-
-        self.cache.active_ws = active_ws;
-        self.cache.workspaces = current_ws;
-        self.cache.ws_render_width = current_ws_width;
-        ws_clear_width
-    }
-
-    fn draw_date(&mut self, pb: &mut PixelBuffer, x: usize, width: usize) {
-        let glyphs = self.glyphs.as_ref().unwrap();
-        pb.clear_rect(x, width);
-        let day = DATE_DAY.load(Ordering::Acquire);
-        let month = DATE_MONTH.load(Ordering::Acquire);
-        let year = DATE_YEAR.load(Ordering::Acquire);
-
-        let date_content_width = Self::date_content_width(glyphs, day, month, year);
-        let mut cur_x = (pb.width / 2)
-            .saturating_sub(MARGIN_GAP / 2)
-            .saturating_sub(date_content_width);
-
-        pb.draw_num_pad2(&mut cur_x, glyphs, day, COLOR_DATE, 1, 1);
-        let slash_y = (BAR_HEIGHT.saturating_sub(glyphs.slash.height)) / 2;
-        pb.draw_glyph(cur_x, slash_y, &glyphs.slash, COLOR_DATE);
-        cur_x += glyphs.slash.width + 1;
-        pb.draw_num_pad2(&mut cur_x, glyphs, month, COLOR_DATE, 1, 1);
-        pb.draw_glyph(cur_x, slash_y, &glyphs.slash, COLOR_DATE);
-        cur_x += glyphs.slash.width + 1;
-        pb.draw_num_pad2(&mut cur_x, glyphs, year, COLOR_DATE, 1, 0);
-
-        self.cache.day = day;
-        self.cache.month = month;
-        self.cache.year = year;
-    }
-
-    fn draw_clock(&mut self, pb: &mut PixelBuffer, x: usize, width: usize) {
-        let glyphs = self.glyphs.as_ref().unwrap();
-        pb.clear_rect(x, width);
-        let h = TIME_HOURS.load(Ordering::Acquire);
-        let m = TIME_MINUTES.load(Ordering::Acquire);
-
-        let display_h = if h == 0 {
-            12
-        } else if h > 12 {
-            h - 12
-        } else {
-            h
-        };
-        let am_pm = if h >= 12 { &glyphs.pm } else { &glyphs.am };
-
-        let mut cur_x = x;
-        pb.draw_num_pad2(&mut cur_x, glyphs, display_h, COLOR_TIME, 1, 1);
-        let colon_y = (BAR_HEIGHT.saturating_sub(glyphs.colon.height)) / 2;
-        pb.draw_glyph(cur_x, colon_y, &glyphs.colon, COLOR_TIME);
-        cur_x += glyphs.colon.width + 1;
-        pb.draw_num_pad2(&mut cur_x, glyphs, m, COLOR_TIME, 1, 1);
-
-        cur_x += glyphs.space.width + 1;
-        let ampm_y = (BAR_HEIGHT.saturating_sub(am_pm.height)) / 2;
-        pb.draw_glyph(cur_x, ampm_y, am_pm, COLOR_TIME);
-
-        self.cache.hour = h;
-        self.cache.minute = m;
-    }
-
-    fn draw_battery(&mut self, pb: &mut PixelBuffer, x: usize) {
-        let glyphs = self.glyphs.as_ref().unwrap();
-        pb.clear_rect(x, BATTERY_SLOT_MAX_WIDTH);
-        let bat_percent = BATTERY_PERCENT.load(Ordering::Acquire);
-        let bat_state = BATTERY_STATE.load(Ordering::Acquire);
-        let bat_est_m_total = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
-
-        let bat_content_width =
-            Self::battery_content_width(glyphs, bat_percent, bat_state, bat_est_m_total);
-        let mut cur_x = pb.width.saturating_sub(MARGIN_RIGHT + bat_content_width);
-
-        if bat_state == 3 {
-            let g = &glyphs.full;
-            pb.draw_glyph(
-                cur_x,
-                (BAR_HEIGHT.saturating_sub(g.height)) / 2,
-                g,
-                COLOR_BAT,
-            );
-        } else {
-            if bat_percent == 100 {
-                for d in [1, 0, 0] {
-                    let g = &glyphs.numbers[d];
-                    pb.draw_glyph(
-                        cur_x,
-                        (BAR_HEIGHT.saturating_sub(g.height)) / 2,
-                        g,
-                        COLOR_BAT,
-                    );
-                    cur_x += g.width + 1;
-                }
-            } else {
-                pb.draw_num_simple(&mut cur_x, glyphs, bat_percent, COLOR_BAT, 1);
-            }
-            pb.draw_glyph(
-                cur_x,
-                (BAR_HEIGHT.saturating_sub(glyphs.percent.height)) / 2,
-                &glyphs.percent,
-                COLOR_BAT,
-            );
-            cur_x += glyphs.percent.width + 3;
-
-            let state_glyph = if bat_state == 2 {
-                &glyphs.plus
-            } else {
-                &glyphs.minus
-            };
-            pb.draw_glyph(
-                cur_x,
-                (BAR_HEIGHT.saturating_sub(state_glyph.height)) / 2,
-                state_glyph,
-                COLOR_BAT,
-            );
-            cur_x += state_glyph.width + 3;
-
-            let est_h = (bat_est_m_total / 60) as u8;
-            let est_m = (bat_est_m_total % 60) as u8;
-            pb.draw_num_pad2(&mut cur_x, glyphs, est_h, COLOR_BAT, 1, 1);
-            let colon_y = (BAR_HEIGHT.saturating_sub(glyphs.colon.height)) / 2;
-            pb.draw_glyph(cur_x, colon_y, &glyphs.colon, COLOR_BAT);
-            cur_x += glyphs.colon.width + 1;
-            pb.draw_num_pad2(&mut cur_x, glyphs, est_m, COLOR_BAT, 1, 0);
-        }
-
-        self.cache.bat_percent = bat_percent;
-        self.cache.bat_state = bat_state;
-        self.cache.bat_est_min = bat_est_m_total;
-    }
-
-    fn battery_content_width(
-        glyphs: &font_renderer::GlyphCache,
-        percent: u8,
-        state: u8,
-        est_m_total: u16,
-    ) -> usize {
-        if state == 3 {
-            return glyphs.full.width;
-        }
-
-        let mut w = Self::battery_percent_width(glyphs, percent);
-        w += glyphs.percent.width;
-        w +=
-            3 + (if state == 2 {
-                glyphs.plus.width
-            } else {
-                glyphs.minus.width
-            }) + 3;
-
-        let est_h = (est_m_total / 60) as u8;
-        let est_m = (est_m_total % 60) as u8;
-
-        w += glyphs.numbers[(est_h / 10) as usize].width
-            + 1
-            + glyphs.numbers[(est_h % 10) as usize].width
-            + 1;
-        w += glyphs.colon.width + 1;
-        w += glyphs.numbers[(est_m / 10) as usize].width
-            + 1
-            + glyphs.numbers[(est_m % 10) as usize].width;
-        w
-    }
-
-    fn battery_percent_width(glyphs: &font_renderer::GlyphCache, percent: u8) -> usize {
-        if percent == 100 {
-            glyphs.numbers[1].width + 1 + glyphs.numbers[0].width + 1 + glyphs.numbers[0].width + 1
-        } else if percent >= 10 {
-            glyphs.numbers[(percent / 10) as usize].width
-                + 1
-                + glyphs.numbers[(percent % 10) as usize].width
-                + 1
-        } else {
-            glyphs.numbers[percent as usize].width + 1
-        }
-    }
-
-    fn workspace_content_width(
-        glyphs: &font_renderer::GlyphCache,
-        workspaces: &[bool; 10],
-        active_ws: u8,
-    ) -> usize {
-        let mut width = 0;
-        for (i, ws) in workspaces.iter().enumerate() {
-            let ws_num = (i + 1) as u8;
-            if *ws || active_ws == ws_num {
-                if ws_num >= 10 {
-                    width += glyphs.numbers[(ws_num / 10) as usize].width
-                        + 1
-                        + glyphs.numbers[(ws_num % 10) as usize].width;
-                } else {
-                    width += glyphs.numbers[ws_num as usize].width;
-                }
-                width += 10;
-            }
-        }
-        width
-    }
-
-    fn date_content_width(
-        glyphs: &font_renderer::GlyphCache,
-        day: u8,
-        month: u8,
-        year: u8,
-    ) -> usize {
-        let mut width = 0;
-        width += glyphs.numbers[(day / 10) as usize].width
-            + 1
-            + glyphs.numbers[(day % 10) as usize].width
-            + 1;
-        width += glyphs.slash.width + 1;
-        width += glyphs.numbers[(month / 10) as usize].width
-            + 1
-            + glyphs.numbers[(month % 10) as usize].width
-            + 1;
-        width += glyphs.slash.width + 1;
-        width += glyphs.numbers[(year / 10) as usize].width
-            + 1
-            + glyphs.numbers[(year % 10) as usize].width;
-        width
     }
 }
 
