@@ -1,18 +1,17 @@
-use std::env;
 use std::io::{BufRead, BufReader};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::thread;
+use std::time::Duration;
+use std::{env, thread};
 
-use crate::{ACTIVE_WORKSPACE, WORKSPACES, ping_main_thread};
+use crate::{ACTIVE_WORKSPACE, WORKSPACES_MASK, ping_main_thread};
 
 pub fn start(wake_fd: OwnedFd) {
-    let _ = thread::Builder::new()
-        .stack_size(128 * 1024)
-        .spawn(move || {
-            println!("[Hyprland Thread] Started");
+    let _ = thread::Builder::new().spawn(move || {
+        println!("[Hyprland Thread] Started");
 
         // 1. Initialize current workspaces using `hyprctl`
         init_workspaces();
@@ -22,7 +21,10 @@ pub fn start(wake_fd: OwnedFd) {
         let his =
             env::var("HYPRLAND_INSTANCE_SIGNATURE").expect("HYPRLAND_INSTANCE_SIGNATURE not set.");
         let runtime_dir = env::var("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR not set.");
-        let socket_path = format!("{}/hypr/{}/.socket2.sock", runtime_dir, his);
+        let socket_path = PathBuf::from(runtime_dir)
+            .join("hypr")
+            .join(his)
+            .join(".socket2.sock");
 
         loop {
             match UnixStream::connect(&socket_path) {
@@ -31,7 +33,7 @@ pub fn start(wake_fd: OwnedFd) {
                     let mut reader = BufReader::new(stream);
                     let mut line = String::with_capacity(128);
 
-                    while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
+                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
                         handle_event(&line, &wake_fd);
                         line.clear();
                     }
@@ -42,26 +44,34 @@ pub fn start(wake_fd: OwnedFd) {
                         "[Hyprland Thread] Failed to connect to IPC socket: {}. Retrying in 2s...",
                         e
                     );
-                    thread::sleep(std::time::Duration::from_secs(2));
+                    thread::sleep(Duration::from_secs(2));
                 }
             }
         }
     });
 }
 
+fn set_workspace_occupied(ws: u8) {
+    if (1..=10).contains(&ws) {
+        WORKSPACES_MASK.fetch_or(1 << (ws - 1), Ordering::Release);
+    }
+}
+
+fn set_workspace_empty(ws: u8) {
+    if (1..=10).contains(&ws) {
+        WORKSPACES_MASK.fetch_and(!(1 << (ws - 1)), Ordering::Release);
+    }
+}
+
 fn init_workspaces() {
     // hyprctl activeworkspace
     if let Ok(output) = Command::new("hyprctl").arg("activeworkspace").output() {
         let out_str = String::from_utf8_lossy(&output.stdout);
-        // Look for "workspace ID " then parse the next token
-        if let Some(ws_idx) = out_str.find("workspace ID ") {
-            let remainder = &out_str[ws_idx + 13..];
+        if let Some((_, remainder)) = out_str.split_once("workspace ID ") {
             let ws_str = remainder.split_whitespace().next().unwrap_or("");
             if let Ok(ws) = ws_str.parse::<u8>() {
                 ACTIVE_WORKSPACE.store(ws, Ordering::Release);
-                if ws > 0 && ws <= 10 {
-                    WORKSPACES[(ws - 1) as usize].store(true, Ordering::Release);
-                }
+                set_workspace_occupied(ws);
             }
         }
     }
@@ -72,11 +82,8 @@ fn init_workspaces() {
         for line in out_str.lines() {
             if let Some(remainder) = line.strip_prefix("workspace ID ") {
                 let ws_str = remainder.split_whitespace().next().unwrap_or("");
-                if let Ok(ws) = ws_str.parse::<u8>()
-                    && ws > 0
-                    && ws <= 10
-                {
-                    WORKSPACES[(ws - 1) as usize].store(true, Ordering::Release);
+                if let Ok(ws) = ws_str.parse::<u8>() {
+                    set_workspace_occupied(ws);
                 }
             }
         }
@@ -84,31 +91,23 @@ fn init_workspaces() {
 }
 
 fn handle_event(event: &str, wake_fd: &OwnedFd) {
-    // Some Hyprland events have trailing newlines or whitespace depending on the reader
     let event = event.trim();
 
     if let Some(ws_str) = event.strip_prefix("workspace>>") {
         if let Ok(ws) = ws_str.parse::<u8>() {
             ACTIVE_WORKSPACE.store(ws, Ordering::Release);
-            if ws > 0 && ws <= 10 {
-                WORKSPACES[(ws - 1) as usize].store(true, Ordering::Release);
-            }
+            set_workspace_occupied(ws);
             ping_main_thread(wake_fd);
         }
     } else if let Some(ws_str) = event.strip_prefix("createworkspace>>") {
-        if let Ok(ws) = ws_str.parse::<u8>()
-            && ws > 0
-            && ws <= 10
-        {
-            WORKSPACES[(ws - 1) as usize].store(true, Ordering::Release);
+        if let Ok(ws) = ws_str.parse::<u8>() {
+            set_workspace_occupied(ws);
             ping_main_thread(wake_fd);
         }
     } else if let Some(ws_str) = event.strip_prefix("destroyworkspace>>")
         && let Ok(ws) = ws_str.parse::<u8>()
-        && ws > 0
-        && ws <= 10
     {
-        WORKSPACES[(ws - 1) as usize].store(false, Ordering::Release);
+        set_workspace_empty(ws);
         ping_main_thread(wake_fd);
     }
 }

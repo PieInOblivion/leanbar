@@ -5,9 +5,6 @@ pub enum LeanbarError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Font error: {0}")]
-    Font(String),
-
     #[error("Atlas error: {0}")]
     Atlas(String),
 
@@ -34,7 +31,4 @@ pub enum LeanbarError {
 
     #[error("Buffer conversion error: {0}")]
     SliceConversion(#[from] std::array::TryFromSliceError),
-
-    #[error("UTF-8 conversion error: {0}")]
-    Utf8(#[from] std::string::FromUtf8Error),
 }

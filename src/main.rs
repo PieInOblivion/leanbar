@@ -2,13 +2,13 @@ use rustix::event::{EventfdFlags, PollFd, PollFlags, eventfd, poll};
 use rustix::io::{read, write};
 use std::fs;
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use wayland_client::Connection;
 
 mod app_state;
 mod error;
-mod font_renderer;
+mod font;
 mod threads;
 
 // Colors are 0xAARRGGBB
@@ -21,18 +21,7 @@ pub const COLOR_BAT: u32 = 0xffa6e3a1;
 use app_state::AppState;
 use error::LeanbarError;
 
-pub static WORKSPACES: [AtomicBool; 10] = [
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-];
+pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new(0);
 pub static ACTIVE_WORKSPACE: AtomicU8 = AtomicU8::new(1);
 
 pub static TIME_HOURS: AtomicU8 = AtomicU8::new(0);
@@ -49,18 +38,21 @@ pub fn ping_main_thread(fd: &OwnedFd) {
 }
 
 fn main() -> Result<(), LeanbarError> {
-    let args: Vec<String> = std::env::args().collect();
-    if font_renderer::maybe_run_builder_mode(&args)? {
+    let args: Box<[String]> = std::env::args().collect();
+    if font::builder::maybe_run_builder_mode(&args)? {
         return Ok(());
     }
 
     println!("Starting leanbar...");
 
     let font_path = "/usr/share/fonts/noto/NotoSans-Regular.ttf";
-    let glyph_cache = font_renderer::GlyphCache::load_or_build(font_path, 15.0).ok();
-    if glyph_cache.is_none() {
-        eprintln!("Failed to load font. Make sure the path is correct.");
-    }
+    let glyph_cache = match font::renderer::GlyphCache::load_or_build(font_path, 15.0) {
+        Ok(cache) => Some(cache),
+        Err(e) => {
+            eprintln!("Failed to load font atlas ({e}). Make sure font path is correct.");
+            None
+        }
+    };
 
     // Check if battery exists on startup
     if fs::metadata("/sys/class/power_supply/BAT0/capacity").is_ok() {
@@ -94,7 +86,7 @@ fn main() -> Result<(), LeanbarError> {
 
     let backend = conn.backend();
     let wayland_fd = backend.poll_fd();
-    let mut poll_fds = vec![
+    let mut poll_fds = [
         PollFd::new(&wake_fd, PollFlags::IN),
         PollFd::new(&wayland_fd, PollFlags::IN),
     ];
@@ -103,7 +95,7 @@ fn main() -> Result<(), LeanbarError> {
     loop {
         let _ = conn.flush();
 
-        match poll(&mut poll_fds, None) {
+        match poll(&mut poll_fds[..], None) {
             Ok(_) => {
                 if poll_fds[0].revents().contains(PollFlags::IN) {
                     let _ = read(&wake_fd, &mut buf);
@@ -111,7 +103,9 @@ fn main() -> Result<(), LeanbarError> {
                 }
 
                 if poll_fds[1].revents().contains(PollFlags::IN) {
-                    if let Err(e) = conn.prepare_read().unwrap().read() {
+                    if let Some(guard) = conn.prepare_read()
+                        && let Err(e) = guard.read()
+                    {
                         eprintln!("Wayland read error: {}", e);
                     }
                     if let Err(e) = event_queue.dispatch_pending(&mut state) {
