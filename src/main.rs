@@ -2,8 +2,7 @@ use rustix::event::{EventfdFlags, PollFd, PollFlags, eventfd, poll};
 use rustix::io::{read, write};
 use std::fs;
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
-
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use wayland_client::Connection;
 
 mod app_state;
@@ -21,17 +20,10 @@ pub const COLOR_BAT: u32 = 0xffa6e3a1;
 use app_state::AppState;
 use error::LeanbarError;
 
-pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new(0);
-pub static ACTIVE_WORKSPACE: AtomicU8 = AtomicU8::new(1);
-
-pub static TIME_HOURS: AtomicU8 = AtomicU8::new(0);
-pub static TIME_MINUTES: AtomicU8 = AtomicU8::new(0);
-pub static DATE_DAY: AtomicU8 = AtomicU8::new(0);
-pub static DATE_MONTH: AtomicU8 = AtomicU8::new(0);
-pub static DATE_YEAR: AtomicU8 = AtomicU8::new(0);
-pub static BATTERY_PERCENT: AtomicU8 = AtomicU8::new(100);
-pub static BATTERY_STATE: AtomicU8 = AtomicU8::new(255); // 0: Unknown, 1: Discharging, 2: Charging, 3: Full, 255: No Battery
-pub static BATTERY_ESTIMATE_M: AtomicU16 = AtomicU16::new(0);
+pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new(1 << 10); // bits 13..10: active_ws, bits 9..0: occupied mask
+pub static TIME_MASK: AtomicU16 = AtomicU16::new(0); // hours, minutes
+pub static DATE_MASK: AtomicU32 = AtomicU32::new(0); // day, month, year
+pub static BATTERY_MASK: AtomicU32 = AtomicU32::new(0); // percent, state, estimate_m (0 = No Battery; state: 0: Unknown, 1: Discharging, 2: Charging, 3: Full)
 
 pub fn ping_main_thread(fd: &OwnedFd) {
     let _ = write(fd, &1u64.to_ne_bytes());
@@ -56,7 +48,7 @@ fn main() -> Result<(), LeanbarError> {
 
     // Check if battery exists on startup
     if fs::metadata("/sys/class/power_supply/BAT0/capacity").is_ok() {
-        BATTERY_STATE.store(0, Ordering::Release);
+        BATTERY_MASK.store(1, Ordering::Relaxed);
     }
 
     let conn = Connection::connect_to_env()?;
@@ -118,4 +110,48 @@ fn main() -> Result<(), LeanbarError> {
             }
         }
     }
+}
+
+pub fn pack_workspaces(active_ws: u8, occupied_mask: u16) -> u16 {
+    ((active_ws as u16) << 10) | (occupied_mask & 0x03FF)
+}
+
+// (active_ws, occupied_mask)
+pub fn unpack_workspaces(mask: u16) -> (u8, u16) {
+    (((mask >> 10) & 0x0F) as u8, mask & 0x03FF)
+}
+
+pub fn pack_time(hours: u8, minutes: u8) -> u16 {
+    ((hours as u16) << 8) | (minutes as u16)
+}
+
+// (hours, minutes)
+pub fn unpack_time(mask: u16) -> (u8, u8) {
+    (((mask >> 8) & 0xFF) as u8, (mask & 0xFF) as u8)
+}
+
+pub fn pack_date(day: u8, month: u8, year: u8) -> u32 {
+    ((day as u32) << 16) | ((month as u32) << 8) | (year as u32)
+}
+
+// (day, month, year)
+pub fn unpack_date(mask: u32) -> (u8, u8, u8) {
+    (
+        ((mask >> 16) & 0xFF) as u8,
+        ((mask >> 8) & 0xFF) as u8,
+        (mask & 0xFF) as u8,
+    )
+}
+
+pub fn pack_battery(percent: u8, state: u8, estimate_m: u16) -> u32 {
+    ((percent as u32) << 24) | ((state as u32) << 16) | (estimate_m as u32)
+}
+
+// (percent, state, estimate_m)
+pub fn unpack_battery(mask: u32) -> (u8, u8, u16) {
+    (
+        ((mask >> 24) & 0xFF) as u8,
+        ((mask >> 16) & 0xFF) as u8,
+        (mask & 0xFFFF) as u16,
+    )
 }

@@ -20,9 +20,9 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::{
-    ACTIVE_WORKSPACE, BATTERY_ESTIMATE_M, BATTERY_PERCENT, BATTERY_STATE, COLOR_BAT, COLOR_DATE,
-    COLOR_TIME, COLOR_WS_FOCUSED, COLOR_WS_OPEN, DATE_DAY, DATE_MONTH, DATE_YEAR, TIME_HOURS,
-    TIME_MINUTES, WORKSPACES_MASK, error::LeanbarError, font::GlyphCache, font::RasterizedGlyph,
+    BATTERY_MASK, COLOR_BAT, COLOR_DATE, COLOR_TIME, COLOR_WS_FOCUSED, COLOR_WS_OPEN, DATE_MASK,
+    TIME_MASK, WORKSPACES_MASK, error::LeanbarError, font::GlyphCache, font::RasterizedGlyph,
+    unpack_battery, unpack_date, unpack_time, unpack_workspaces,
 };
 
 const BAR_HEIGHT: usize = 28;
@@ -77,36 +77,13 @@ struct PixelBuffer<'a> {
 }
 
 /// Stores the last rendered state to enable efficient partial updates (damage tracking).
+#[derive(Default)]
 struct DrawCache {
-    active_ws: u8,
-    workspaces: u16, // Bitmask of occupied workspaces
+    ws_mask: u16, // bits 13..10: active_ws, bits 9..0: occupied mask
     ws_render_width: usize,
-    minute: u8,
-    hour: u8,
-    day: u8,
-    month: u8,
-    year: u8,
-    bat_percent: u8,
-    bat_state: u8,
-    bat_est_min: u16,
-}
-
-impl Default for DrawCache {
-    fn default() -> Self {
-        Self {
-            active_ws: 255,
-            workspaces: 0,
-            ws_render_width: 0,
-            minute: 255,
-            hour: 255,
-            day: 255,
-            month: 255,
-            year: 255,
-            bat_percent: 255,
-            bat_state: 255,
-            bat_est_min: 65535,
-        }
-    }
+    time_mask: u16,
+    date_mask: u32,
+    battery_mask: u32,
 }
 
 impl<'a> PixelBuffer<'a> {
@@ -328,31 +305,15 @@ impl AppState {
             return false;
         }
 
-        let active_ws = ACTIVE_WORKSPACE.load(Ordering::Acquire);
-        let hour = TIME_HOURS.load(Ordering::Acquire);
-        let minute = TIME_MINUTES.load(Ordering::Acquire);
-        let day = DATE_DAY.load(Ordering::Acquire);
-        let month = DATE_MONTH.load(Ordering::Acquire);
-        let year = DATE_YEAR.load(Ordering::Acquire);
-        let battery_percent = BATTERY_PERCENT.load(Ordering::Acquire);
-        let battery_state = BATTERY_STATE.load(Ordering::Acquire);
-        let battery_estimate = BATTERY_ESTIMATE_M.load(Ordering::Acquire);
+        let current_ws_mask = WORKSPACES_MASK.load(Ordering::Relaxed);
+        let time_mask = TIME_MASK.load(Ordering::Relaxed);
+        let date_mask = DATE_MASK.load(Ordering::Relaxed);
+        let battery_mask = BATTERY_MASK.load(Ordering::Relaxed);
 
-        let current_ws_mask = WORKSPACES_MASK.load(Ordering::Acquire);
-
-        let ws_changed = self.force_full_redraw
-            || current_ws_mask != self.cache.workspaces
-            || active_ws != self.cache.active_ws;
-        let clock_changed =
-            self.force_full_redraw || hour != self.cache.hour || minute != self.cache.minute;
-        let date_changed = self.force_full_redraw
-            || day != self.cache.day
-            || month != self.cache.month
-            || year != self.cache.year;
-        let bat_changed = self.force_full_redraw
-            || battery_percent != self.cache.bat_percent
-            || battery_state != self.cache.bat_state
-            || battery_estimate != self.cache.bat_est_min;
+        let ws_changed = self.force_full_redraw || current_ws_mask != self.cache.ws_mask;
+        let clock_changed = self.force_full_redraw || time_mask != self.cache.time_mask;
+        let date_changed = self.force_full_redraw || date_mask != self.cache.date_mask;
+        let bat_changed = self.force_full_redraw || battery_mask != self.cache.battery_mask;
 
         if !ws_changed && !clock_changed && !date_changed && !bat_changed {
             return false;
@@ -371,20 +332,20 @@ impl AppState {
         };
 
         if ws_changed {
-            renderer.draw_workspaces(active_ws, current_ws_mask);
+            renderer.draw_workspaces(current_ws_mask);
         }
 
         let center = renderer.pb.width / 2;
         if date_changed {
-            renderer.draw_date_module(center, day, month, year);
+            renderer.draw_date_module(center, date_mask);
         }
 
         if clock_changed {
-            renderer.draw_clock_module(center, hour, minute);
+            renderer.draw_clock_module(center, time_mask);
         }
 
-        if bat_changed && battery_state != 255 {
-            renderer.draw_battery_module(battery_percent, battery_state, battery_estimate);
+        if bat_changed && battery_mask != 0 {
+            renderer.draw_battery_module(battery_mask);
         }
 
         self.force_full_redraw = false;
@@ -409,7 +370,8 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn draw_workspaces(&mut self, active_ws: u8, mask: u16) {
+    fn draw_workspaces(&mut self, ws_mask: u16) {
+        let (active_ws, mask) = unpack_workspaces(ws_mask);
         let mut total_width = 0;
         for num in 1..=10 {
             if (mask & (1 << (num - 1))) != 0 || active_ws == num {
@@ -418,8 +380,7 @@ impl<'a> Renderer<'a> {
         }
 
         let old_width = self.cache.ws_render_width;
-        self.cache.workspaces = mask;
-        self.cache.active_ws = active_ws;
+        self.cache.ws_mask = ws_mask;
         self.cache.ws_render_width = total_width;
 
         self.clear_and_damage_slot(0, old_width.max(total_width));
@@ -439,7 +400,8 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn draw_date_module(&mut self, center: usize, day: u8, month: u8, year: u8) {
+    fn draw_date_module(&mut self, center: usize, date_mask: u32) {
+        let (day, month, year) = unpack_date(date_mask);
         let max_width = (self.glyphs.max_digit_width * 6) + (self.glyphs.slash.width * 2) + 10;
         let slot_x = center
             .saturating_sub(MARGIN_GAP / 2)
@@ -473,12 +435,11 @@ impl<'a> Renderer<'a> {
         self.pb
             .draw_num(&mut cursor_x, self.glyphs, year as u32, color, 2, 0);
 
-        self.cache.day = day;
-        self.cache.month = month;
-        self.cache.year = year;
+        self.cache.date_mask = date_mask;
     }
 
-    fn draw_clock_module(&mut self, center: usize, hour: u8, minute: u8) {
+    fn draw_clock_module(&mut self, center: usize, time_mask: u16) {
+        let (hour, minute) = unpack_time(time_mask);
         let max_width = (self.glyphs.max_digit_width * 4)
             + self.glyphs.colon.width
             + self.glyphs.space.width
@@ -510,11 +471,12 @@ impl<'a> Renderer<'a> {
         };
         self.pb.draw_centered(&mut cursor_x, ampm_glyph, color, 0);
 
-        self.cache.hour = hour;
-        self.cache.minute = minute;
+        self.cache.time_mask = time_mask;
     }
 
-    fn draw_battery_module(&mut self, percent: u8, state: u8, estimate: u16) {
+    fn draw_battery_module(&mut self, battery_mask: u32) {
+        let (percent, state, estimate) = unpack_battery(battery_mask);
+
         let slot_x = self.pb.width.saturating_sub(BATTERY_SLOT_MAX_WIDTH);
         self.clear_and_damage_slot(slot_x, BATTERY_SLOT_MAX_WIDTH);
         let color = COLOR_BAT;
@@ -560,9 +522,7 @@ impl<'a> Renderer<'a> {
             self.pb
                 .draw_num(&mut cursor_x, self.glyphs, est_m, color, 2, 0);
         }
-        self.cache.bat_percent = percent;
-        self.cache.bat_state = state;
-        self.cache.bat_est_min = estimate;
+        self.cache.battery_mask = battery_mask;
     }
 }
 

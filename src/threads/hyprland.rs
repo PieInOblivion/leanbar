@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{env, thread};
 
-use crate::{ACTIVE_WORKSPACE, WORKSPACES_MASK, ping_main_thread};
+use crate::{WORKSPACES_MASK, pack_workspaces, ping_main_thread, unpack_workspaces};
 
 pub fn start(wake_fd: OwnedFd) {
     let _ = thread::Builder::new().spawn(move || {
@@ -51,15 +51,27 @@ pub fn start(wake_fd: OwnedFd) {
     });
 }
 
+fn set_active_workspace(ws: u8) {
+    if (1..=10).contains(&ws) {
+        let (_, occupied) = unpack_workspaces(WORKSPACES_MASK.load(Ordering::Relaxed));
+        let new_occupied = occupied | (1 << (ws - 1));
+        WORKSPACES_MASK.store(pack_workspaces(ws, new_occupied), Ordering::Relaxed);
+    }
+}
+
 fn set_workspace_occupied(ws: u8) {
     if (1..=10).contains(&ws) {
-        WORKSPACES_MASK.fetch_or(1 << (ws - 1), Ordering::Release);
+        let (active, occupied) = unpack_workspaces(WORKSPACES_MASK.load(Ordering::Relaxed));
+        let new_occupied = occupied | (1 << (ws - 1));
+        WORKSPACES_MASK.store(pack_workspaces(active, new_occupied), Ordering::Relaxed);
     }
 }
 
 fn set_workspace_empty(ws: u8) {
     if (1..=10).contains(&ws) {
-        WORKSPACES_MASK.fetch_and(!(1 << (ws - 1)), Ordering::Release);
+        let (active, occupied) = unpack_workspaces(WORKSPACES_MASK.load(Ordering::Relaxed));
+        let new_occupied = occupied & !(1 << (ws - 1));
+        WORKSPACES_MASK.store(pack_workspaces(active, new_occupied), Ordering::Relaxed);
     }
 }
 
@@ -70,8 +82,7 @@ fn init_workspaces() {
         if let Some((_, remainder)) = out_str.split_once("workspace ID ") {
             let ws_str = remainder.split_whitespace().next().unwrap_or("");
             if let Ok(ws) = ws_str.parse::<u8>() {
-                ACTIVE_WORKSPACE.store(ws, Ordering::Release);
-                set_workspace_occupied(ws);
+                set_active_workspace(ws);
             }
         }
     }
@@ -95,8 +106,7 @@ fn handle_event(event: &str, wake_fd: &OwnedFd) {
 
     if let Some(ws_str) = event.strip_prefix("workspace>>") {
         if let Ok(ws) = ws_str.parse::<u8>() {
-            ACTIVE_WORKSPACE.store(ws, Ordering::Release);
-            set_workspace_occupied(ws);
+            set_active_workspace(ws);
             ping_main_thread(wake_fd);
         }
     } else if let Some(ws_str) = event.strip_prefix("createworkspace>>") {

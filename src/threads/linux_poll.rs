@@ -5,8 +5,7 @@ use std::{fs, thread};
 use time::OffsetDateTime;
 
 use crate::{
-    BATTERY_ESTIMATE_M, BATTERY_PERCENT, BATTERY_STATE, DATE_DAY, DATE_MONTH, DATE_YEAR,
-    TIME_HOURS, TIME_MINUTES, ping_main_thread,
+    BATTERY_MASK, DATE_MASK, TIME_MASK, pack_battery, pack_date, pack_time, ping_main_thread,
 };
 
 pub fn start(wake_fd: OwnedFd) {
@@ -24,27 +23,27 @@ pub fn start(wake_fd: OwnedFd) {
                 let current_year = (now.year() % 100) as u8;
 
                 let mut changed = false;
-                if TIME_MINUTES.load(Ordering::Acquire) != current_minute {
-                    TIME_MINUTES.store(current_minute, Ordering::Release);
-                    TIME_HOURS.store(current_hour, Ordering::Release);
-                    changed = true;
-                }
-                if DATE_DAY.load(Ordering::Acquire) != current_day {
-                    DATE_DAY.store(current_day, Ordering::Release);
-                    DATE_MONTH.store(current_month, Ordering::Release);
-                    DATE_YEAR.store(current_year, Ordering::Release);
+                let new_time_mask = pack_time(current_hour, current_minute);
+                if TIME_MASK.load(Ordering::Relaxed) != new_time_mask {
+                    TIME_MASK.store(new_time_mask, Ordering::Relaxed);
                     changed = true;
                 }
 
-                // 2. Read battery every 30 ticks, but skip entirely if BATTERY_STATE is 255
-                if tick_counter % 30 == 0 && BATTERY_STATE.load(Ordering::Acquire) != 255 {
+                let new_date_mask = pack_date(current_day, current_month, current_year);
+                if DATE_MASK.load(Ordering::Relaxed) != new_date_mask {
+                    DATE_MASK.store(new_date_mask, Ordering::Relaxed);
+                    changed = true;
+                }
+
+                // 2. Read battery every 30 ticks, but skip entirely if BATTERY_MASK is 0 (No Battery)
+                if tick_counter % 30 == 0 && BATTERY_MASK.load(Ordering::Relaxed) != 0 {
                     tick_counter = 0;
                     if update_battery_state() {
                         changed = true;
                     }
                 }
 
-                // Only wake up the main thread if the minute, date, or battery actually changed
+                // Only wake up the main thread if the time, date, or battery actually changed
                 if changed {
                     ping_main_thread(&wake_fd);
                 }
@@ -62,17 +61,12 @@ fn read_sysfs<T: std::str::FromStr>(path: &str) -> Option<T> {
 }
 
 fn update_battery_state() -> bool {
-    let mut changed = false;
     let mut capacity: u8 = 100;
     let mut state: u8 = 0;
 
     // Read capacity
     if let Some(c) = read_sysfs("/sys/class/power_supply/BAT0/capacity") {
         capacity = c;
-    }
-    if BATTERY_PERCENT.load(Ordering::Acquire) != capacity {
-        BATTERY_PERCENT.store(capacity, Ordering::Release);
-        changed = true;
     }
 
     // Read status
@@ -83,10 +77,6 @@ fn update_battery_state() -> bool {
             "Full" => 3,
             _ => 0,
         };
-    }
-    if BATTERY_STATE.load(Ordering::Acquire) != state {
-        BATTERY_STATE.store(state, Ordering::Release);
-        changed = true;
     }
 
     // Calculate estimate
@@ -118,10 +108,11 @@ fn update_battery_state() -> bool {
         }
     }
 
-    if BATTERY_ESTIMATE_M.load(Ordering::Acquire) != total_minutes {
-        BATTERY_ESTIMATE_M.store(total_minutes, Ordering::Release);
-        changed = true;
+    let new_bat_mask = pack_battery(capacity, state, total_minutes);
+    if BATTERY_MASK.load(Ordering::Relaxed) != new_bat_mask {
+        BATTERY_MASK.store(new_bat_mask, Ordering::Relaxed);
+        true
+    } else {
+        false
     }
-
-    changed
 }
