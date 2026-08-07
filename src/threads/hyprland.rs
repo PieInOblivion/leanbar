@@ -34,6 +34,11 @@ pub fn start(wake_fd: OwnedFd) {
         };
 
         println!("[Hyprland Thread] Connected to IPC socket.");
+
+        // if the OS splits a line across two reads, we'll drop the first chunk
+        // and miss that event. unlikely in practice since our events are ~40 bytes
+        // and the buffer is 512, but not impossible. fix would be a small stack
+        // accumulator to hold partial lines between fills.
         let mut reader = BufReader::with_capacity(512, stream);
 
         while let Ok(buf) = reader.fill_buf() {
