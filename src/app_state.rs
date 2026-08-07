@@ -131,10 +131,10 @@ impl<'a> PixelBuffer<'a> {
                     0 => continue,
                     255 => *px_out = color,
                     _ => {
-                        let r = (color_r * alpha) / 255;
-                        let g = (color_g * alpha) / 255;
-                        let b = (color_b * alpha) / 255;
-                        let a = (color_a * alpha) / 255;
+                        let r = (color_r * alpha + 128) >> 8;
+                        let g = (color_g * alpha + 128) >> 8;
+                        let b = (color_b * alpha + 128) >> 8;
+                        let a = (color_a * alpha + 128) >> 8;
 
                         *px_out = (a << 24) | (r << 16) | (g << 8) | b;
                     }
