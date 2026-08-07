@@ -102,22 +102,15 @@ fn init_workspaces() {
 }
 
 fn handle_event(event: &str, wake_fd: &OwnedFd) {
-    let event = event.trim();
-
-    if let Some(ws_str) = event.strip_prefix("workspace>>") {
-        if let Ok(ws) = ws_str.parse::<u8>() {
-            set_active_workspace(ws);
-            ping_main_thread(wake_fd);
-        }
-    } else if let Some(ws_str) = event.strip_prefix("createworkspace>>") {
-        if let Ok(ws) = ws_str.parse::<u8>() {
-            set_workspace_occupied(ws);
-            ping_main_thread(wake_fd);
-        }
-    } else if let Some(ws_str) = event.strip_prefix("destroyworkspace>>")
-        && let Ok(ws) = ws_str.parse::<u8>()
+    if let Some((name, data)) = event.trim().split_once(">>")
+        && let Ok(ws) = data.parse::<u8>()
     {
-        set_workspace_empty(ws);
+        match name {
+            "workspace" => set_active_workspace(ws),
+            "createworkspace" => set_workspace_occupied(ws),
+            "destroyworkspace" => set_workspace_empty(ws),
+            _ => return,
+        };
         ping_main_thread(wake_fd);
     }
 }
