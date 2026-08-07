@@ -4,7 +4,6 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use std::{env, thread};
 
 use crate::{WORKSPACES_MASK, pack_workspaces, ping_main_thread, unpack_workspaces};
@@ -26,28 +25,31 @@ pub fn start(wake_fd: OwnedFd) {
             .join(his)
             .join(".socket2.sock");
 
-        loop {
-            match UnixStream::connect(&socket_path) {
-                Ok(stream) => {
-                    println!("[Hyprland Thread] Connected to IPC socket.");
-                    let mut reader = BufReader::new(stream);
-                    let mut line = String::with_capacity(128);
+        let stream = match UnixStream::connect(&socket_path) {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("[Hyprland Thread] Failed to connect to IPC socket: {}", e);
+                return;
+            }
+        };
 
-                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                        handle_event(&line, &wake_fd);
-                        line.clear();
-                    }
-                    println!("[Hyprland Thread] Connection closed.");
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[Hyprland Thread] Failed to connect to IPC socket: {}. Retrying in 2s...",
-                        e
-                    );
-                    thread::sleep(Duration::from_secs(2));
-                }
+        println!("[Hyprland Thread] Connected to IPC socket.");
+        let mut reader = BufReader::with_capacity(512, stream);
+
+        while let Ok(buf) = reader.fill_buf() {
+            if buf.is_empty() {
+                break;
+            }
+            if let Some(i) = buf.iter().position(|&b| b == b'\n') {
+                handle_event(&buf[..i], &wake_fd);
+                reader.consume(i + 1);
+            } else {
+                let len = buf.len();
+                reader.consume(len);
             }
         }
+
+        println!("[Hyprland Thread] Connection closed.");
     });
 }
 
@@ -101,16 +103,25 @@ fn init_workspaces() {
     }
 }
 
-fn handle_event(event: &str, wake_fd: &OwnedFd) {
-    if let Some((name, data)) = event.trim().split_once(">>")
-        && let Ok(ws) = data.parse::<u8>()
-    {
-        match name {
-            "workspace" => set_active_workspace(ws),
-            "createworkspace" => set_workspace_occupied(ws),
-            "destroyworkspace" => set_workspace_empty(ws),
-            _ => return,
-        };
-        ping_main_thread(wake_fd);
+fn handle_event(event: &[u8], wake_fd: &OwnedFd) {
+    if let Some(pos) = event.windows(2).position(|w| w == b">>") {
+        let (name, data) = (&event[..pos], &event[pos + 2..]);
+        if let Some(ws) = parse_ws(data) {
+            match name {
+                b"workspace" => set_active_workspace(ws),
+                b"createworkspace" => set_workspace_occupied(ws),
+                b"destroyworkspace" => set_workspace_empty(ws),
+                _ => return,
+            };
+            ping_main_thread(wake_fd);
+        }
+    }
+}
+
+fn parse_ws(data: &[u8]) -> Option<u8> {
+    match data {
+        [b @ b'1'..=b'9'] => Some(b - b'0'),
+        [b'1', b'0'] => Some(10),
+        _ => None,
     }
 }
