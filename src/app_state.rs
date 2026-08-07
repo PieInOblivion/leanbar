@@ -118,11 +118,10 @@ impl<'a> PixelBuffer<'a> {
         let max_gy = glyph.height.min(self.height - y);
         let max_gx = glyph.width.min(self.width - x);
 
-        for gy in 0..max_gy {
-            let py = y + gy;
-            let row_start = py * self.width + x;
-            let mask_start = gy * glyph.width;
+        let mut row_start = y * self.width + x;
+        let mut mask_start = 0;
 
+        for _ in 0..max_gy {
             let pixel_row = &mut self.pixels[row_start..row_start + max_gx];
             let mask_row = &mask[mask_start..mask_start + max_gx];
 
@@ -141,6 +140,8 @@ impl<'a> PixelBuffer<'a> {
                     }
                 }
             }
+            row_start += self.width;
+            mask_start += glyph.width;
         }
     }
 
