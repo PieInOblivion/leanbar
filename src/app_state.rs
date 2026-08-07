@@ -128,16 +128,18 @@ impl<'a> PixelBuffer<'a> {
 
             for (px_out, &alpha_u8) in pixel_row.iter_mut().zip(mask_row) {
                 let alpha = alpha_u8 as u32;
-                if alpha == 0 {
-                    continue;
+                match alpha {
+                    0 => continue,
+                    255 => *px_out = color,
+                    _ => {
+                        let r = (color_r * alpha) / 255;
+                        let g = (color_g * alpha) / 255;
+                        let b = (color_b * alpha) / 255;
+                        let a = (color_a * alpha) / 255;
+
+                        *px_out = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
                 }
-
-                let r = (color_r * alpha) / 255;
-                let g = (color_g * alpha) / 255;
-                let b = (color_b * alpha) / 255;
-                let a = (color_a * alpha) / 255;
-
-                *px_out = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }
