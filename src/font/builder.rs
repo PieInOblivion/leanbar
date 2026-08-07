@@ -7,24 +7,21 @@ use std::process::Command;
 use super::renderer::{ATLAS_MAGIC, GlyphCache, RasterizedGlyph, font_mtime};
 use crate::error::LeanbarError;
 
-pub fn maybe_run_builder_mode(args: &[String]) -> Result<bool, LeanbarError> {
-    if args.get(1).map(String::as_str) != Some("--build-font-atlas") {
-        return Ok(false);
-    }
+pub fn run_builder_mode(args: &mut impl Iterator<Item = String>) -> Result<(), LeanbarError> {
     let font_path = args
-        .get(2)
+        .next()
         .ok_or_else(|| LeanbarError::Atlas("missing font path".into()))?;
-    let size: f32 = args
-        .get(3)
-        .ok_or_else(|| LeanbarError::Atlas("missing size".into()))?
-        .parse()?;
+    let size_str = args
+        .next()
+        .ok_or_else(|| LeanbarError::Atlas("missing size".into()))?;
+    let size: f32 = size_str.parse()?;
     let atlas_path = args
-        .get(4)
+        .next()
         .ok_or_else(|| LeanbarError::Atlas("missing atlas path".into()))?;
 
-    let cache = from_font(font_path, size)?;
-    write_atlas(&cache, font_path, size, Path::new(atlas_path))?;
-    Ok(true)
+    let cache = from_font(&font_path, size)?;
+    write_atlas(&cache, &font_path, size, Path::new(&atlas_path))?;
+    Ok(())
 }
 
 pub fn build_atlas_with_helper(

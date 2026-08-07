@@ -30,9 +30,12 @@ pub fn ping_main_thread(fd: &OwnedFd) {
 }
 
 fn main() -> Result<(), LeanbarError> {
-    let args: Box<[String]> = std::env::args().collect();
-    if font::builder::maybe_run_builder_mode(&args)? {
-        return Ok(());
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--build-font-atlas" {
+            font::builder::run_builder_mode(&mut args)?;
+            return Ok(());
+        }
     }
 
     println!("Starting leanbar...");
