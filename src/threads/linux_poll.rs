@@ -67,7 +67,7 @@ fn read_sysfs_with<T>(path: &str, f: impl FnOnce(&str) -> Option<T>) -> Option<T
     let mut buf = [0u8; 24];
     let mut file = File::open(path).ok()?;
     let len = file.read(&mut buf).ok()?;
-    f(std::str::from_utf8(&buf[..len]).ok()?.trim())
+    f(std::str::from_utf8(&buf[..len]).ok()?.trim_end())
 }
 
 fn read_sysfs_num<T: std::str::FromStr>(path: &str) -> Option<T> {
