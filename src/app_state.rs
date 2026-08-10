@@ -126,19 +126,12 @@ impl<'a> PixelBuffer<'a> {
             let mask_row = &mask[mask_start..mask_start + max_gx];
 
             for (px_out, &alpha_u8) in pixel_row.iter_mut().zip(mask_row) {
-                let alpha = alpha_u8 as u32;
-                match alpha {
-                    0 => continue,
-                    255 => *px_out = color,
-                    _ => {
-                        let r = (color_r * alpha + 128) >> 8;
-                        let g = (color_g * alpha + 128) >> 8;
-                        let b = (color_b * alpha + 128) >> 8;
-                        let a = (color_a * alpha + 128) >> 8;
-
-                        *px_out = (a << 24) | (r << 16) | (g << 8) | b;
-                    }
-                }
+                let a1 = alpha_u8 as u32 + 1;
+                let r = (color_r * a1) >> 8;
+                let g = (color_g * a1) >> 8;
+                let b = (color_b * a1) >> 8;
+                let a = (color_a * a1) >> 8;
+                *px_out = (a << 24) | (r << 16) | (g << 8) | b;
             }
             row_start += self.width;
             mask_start += glyph.width;
