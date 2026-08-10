@@ -10,15 +10,15 @@ mod error;
 mod font;
 mod threads;
 
+use app_state::AppState;
+use error::LeanbarError;
+
 // Colors are 0xAARRGGBB
 pub const COLOR_WS_FOCUSED: u32 = 0xffffffff;
 pub const COLOR_WS_OPEN: u32 = 0xffcba6f7;
 pub const COLOR_TIME: u32 = 0xffcba6f7;
 pub const COLOR_DATE: u32 = 0xff74c7ec;
 pub const COLOR_BAT: u32 = 0xffa6e3a1;
-
-use app_state::AppState;
-use error::LeanbarError;
 
 pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new((1 << 10) | 1); // bits 13..10: active_ws, bits 9..0: occupied mask; default ws1 active+occupied
 pub static TIME_MASK: AtomicU16 = AtomicU16::new(0); // hours, minutes
@@ -41,13 +41,7 @@ fn main() -> Result<(), LeanbarError> {
     println!("Starting leanbar...");
 
     let font_path = "/usr/share/fonts/noto/NotoSans-Regular.ttf";
-    let glyph_cache = match font::renderer::GlyphCache::load_or_build(font_path, 15.0) {
-        Ok(cache) => Some(cache),
-        Err(e) => {
-            eprintln!("Failed to load font atlas ({e}). Make sure font path is correct.");
-            None
-        }
-    };
+    let glyph_cache = font::GlyphCache::load_or_build(font_path, 15.0)?;
 
     // Check if battery exists on startup
     if fs::metadata("/sys/class/power_supply/BAT0/capacity").is_ok() {

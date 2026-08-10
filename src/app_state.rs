@@ -220,11 +220,11 @@ pub struct AppState {
     pub force_full_redraw: bool,
     cache: DrawCache,
 
-    pub glyphs: Option<GlyphCache>,
+    pub glyphs: GlyphCache,
 }
 
 impl AppState {
-    pub fn new(glyphs: Option<GlyphCache>) -> Self {
+    pub fn new(glyphs: GlyphCache) -> Self {
         Self {
             compositor: None,
             shm: None,
@@ -297,9 +297,6 @@ impl AppState {
             Some(p) if self.width > 0 => p,
             _ => return false,
         };
-        if self.glyphs.is_none() {
-            return false;
-        }
 
         let current_ws_mask = WORKSPACES_MASK.load(Ordering::Relaxed);
         let time_mask = TIME_MASK.load(Ordering::Relaxed);
@@ -317,11 +314,10 @@ impl AppState {
 
         let slice = pixels_buf.as_slice_mut();
         let mut pb = PixelBuffer::new(slice, self.width as usize, self.height as usize);
-        let glyphs = self.glyphs.as_ref().unwrap();
 
         let mut renderer = Renderer {
             pb: &mut pb,
-            glyphs,
+            glyphs: &self.glyphs,
             cache: &mut self.cache,
             surface: self.wl_surface.as_ref(),
             height: self.height,
