@@ -128,7 +128,7 @@ impl FontAtlas {
         }
 
         // ONE single heap allocation for all coverage bitmaps
-        let buffer = take(&mut cursor, payload_size)?.to_vec().into_boxed_slice();
+        let buffer = take(&mut cursor, payload_size)?.into();
 
         let mut digit_widths = [0usize; 10];
         for (i, w) in digit_widths.iter_mut().enumerate() {
