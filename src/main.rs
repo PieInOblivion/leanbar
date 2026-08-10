@@ -6,19 +6,13 @@ use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use wayland_client::Connection;
 
 mod app_state;
+mod bar_renderer;
 mod error;
 mod font;
 mod threads;
 
 use app_state::AppState;
 use error::LeanbarError;
-
-// Colors are 0xAARRGGBB
-pub const COLOR_WS_FOCUSED: u32 = 0xffffffff;
-pub const COLOR_WS_OPEN: u32 = 0xffcba6f7;
-pub const COLOR_TIME: u32 = 0xffcba6f7;
-pub const COLOR_DATE: u32 = 0xff74c7ec;
-pub const COLOR_BAT: u32 = 0xffa6e3a1;
 
 pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new((1 << 10) | 1); // bits 13..10: active_ws, bits 9..0: occupied mask; default ws1 active+occupied
 pub static TIME_MASK: AtomicU16 = AtomicU16::new(0); // hours, minutes
@@ -41,7 +35,7 @@ fn main() -> Result<(), LeanbarError> {
     println!("Starting leanbar...");
 
     let font_path = "/usr/share/fonts/noto/NotoSans-Regular.ttf";
-    let glyph_cache = font::GlyphCache::load_or_build(font_path, 15.0)?;
+    let font_atlas = font::FontAtlas::load_or_build(font_path, 15.0)?;
 
     // Check if battery exists on startup
     if fs::metadata("/sys/class/power_supply/BAT0/capacity").is_ok() {
@@ -55,7 +49,7 @@ fn main() -> Result<(), LeanbarError> {
     let display = conn.display();
     let _registry = display.get_registry(&qh, ());
 
-    let mut state = AppState::new(glyph_cache);
+    let mut state = AppState::new(font_atlas);
 
     event_queue.roundtrip(&mut state)?;
     if !state.has_required_globals() {
@@ -123,8 +117,8 @@ pub fn pack_time(hours: u8, minutes: u8) -> u16 {
 }
 
 // (hours, minutes)
-pub fn unpack_time(mask: u16) -> (u8, u8) {
-    (((mask >> 8) & 0xFF) as u8, (mask & 0xFF) as u8)
+pub fn unpack_time(mask: u16) -> (usize, usize) {
+    (((mask >> 8) & 0xFF) as usize, (mask & 0xFF) as usize)
 }
 
 pub fn pack_date(day: u8, month: u8, year: u8) -> u32 {
@@ -132,11 +126,11 @@ pub fn pack_date(day: u8, month: u8, year: u8) -> u32 {
 }
 
 // (day, month, year)
-pub fn unpack_date(mask: u32) -> (u8, u8, u8) {
+pub fn unpack_date(mask: u32) -> (usize, usize, usize) {
     (
-        ((mask >> 16) & 0xFF) as u8,
-        ((mask >> 8) & 0xFF) as u8,
-        (mask & 0xFF) as u8,
+        ((mask >> 16) & 0xFF) as usize,
+        ((mask >> 8) & 0xFF) as usize,
+        (mask & 0xFF) as usize,
     )
 }
 
@@ -145,10 +139,10 @@ pub fn pack_battery(percent: u8, state: u8, estimate_m: u16) -> u32 {
 }
 
 // (percent, state, estimate_m)
-pub fn unpack_battery(mask: u32) -> (u8, u8, u16) {
+pub fn unpack_battery(mask: u32) -> (usize, usize, usize) {
     (
-        ((mask >> 24) & 0xFF) as u8,
-        ((mask >> 16) & 0xFF) as u8,
-        (mask & 0xFFFF) as u16,
+        ((mask >> 24) & 0xFF) as usize,
+        ((mask >> 16) & 0xFF) as usize,
+        (mask & 0xFFFF) as usize,
     )
 }

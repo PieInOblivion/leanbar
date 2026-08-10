@@ -1,4 +1,4 @@
+pub mod atlas;
 pub mod builder;
-pub mod renderer;
 
-pub use renderer::{GlyphCache, RasterizedGlyph};
+pub use atlas::{FontAtlas, GlyphId};
