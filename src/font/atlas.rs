@@ -63,7 +63,7 @@ impl FontAtlas {
 
         println!("[FontAtlas] cache miss: rebuilding");
 
-        if let Some(parent) = &atlas_path.parent() {
+        if let Some(parent) = atlas_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
