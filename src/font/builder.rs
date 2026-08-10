@@ -84,10 +84,7 @@ fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
         };
     }
 
-    let mut digit_widths = [0usize; 10];
-    for i in 0..10 {
-        digit_widths[i] = glyphs[i].width;
-    }
+    let digit_widths = std::array::from_fn(|i| glyphs[i].width);
     let max_digit_width = digit_widths.iter().copied().max().unwrap_or(0);
     let max_ampm_width = glyphs[10].width.max(glyphs[11].width);
 
