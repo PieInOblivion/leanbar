@@ -115,11 +115,10 @@ impl FontAtlas {
         let clock_slot_max_width = take_usize(&mut cursor)?;
 
         let payload_size = take_usize(&mut cursor)?;
-        let count = take_usize(&mut cursor)?;
 
         let mut glyphs = [GlyphMetrics::default(); GLYPH_COUNT];
-        for slot in glyphs.iter_mut().take(count.min(GLYPH_COUNT)) {
-            *slot = GlyphMetrics {
+        for glyph in &mut glyphs {
+            *glyph = GlyphMetrics {
                 offset: take_usize(&mut cursor)?,
                 len: take_usize(&mut cursor)?,
                 width: take_usize(&mut cursor)?,
@@ -130,10 +129,7 @@ impl FontAtlas {
         // ONE single heap allocation for all coverage bitmaps
         let buffer = take(&mut cursor, payload_size)?.into();
 
-        let mut digit_widths = [0usize; 10];
-        for (i, w) in digit_widths.iter_mut().enumerate() {
-            *w = glyphs[i].width;
-        }
+        let digit_widths = std::array::from_fn(|i| glyphs[i].width);
 
         Ok(FontAtlas {
             buffer,

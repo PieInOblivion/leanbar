@@ -132,7 +132,6 @@ fn write_atlas(
     writer.write_all(&cache.clock_slot_max_width.to_le_bytes())?;
 
     writer.write_all(&cache.buffer.len().to_le_bytes())?;
-    writer.write_all(&cache.glyphs.len().to_le_bytes())?;
 
     for g in &cache.glyphs {
         writer.write_all(&g.offset.to_le_bytes())?;
