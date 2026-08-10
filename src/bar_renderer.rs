@@ -102,8 +102,11 @@ impl BarRenderer {
     ) {
         let (active_ws, mask) = unpack_workspaces(ws_mask);
         let mut total_width = 0;
+        let mut active_mask = 0;
+
         for num in 1..=10 {
             if (mask & (1 << (num - 1))) != 0 || active_ws == (num as u8) {
+                active_mask |= 1 << (num - 1);
                 let (digits, len) = FontAtlas::format_num(num, 1);
                 total_width += self.atlas.measure_formatted_digits(&digits, len, 1) + 10;
             }
@@ -119,8 +122,8 @@ impl BarRenderer {
 
         let mut cursor_x = MARGIN_LEFT;
         for num in 1..=10 {
-            let active = active_ws == (num as u8);
-            if (mask & (1 << (num - 1))) != 0 || active {
+            if (active_mask & (1 << (num - 1))) != 0 {
+                let active = active_ws == (num as u8);
                 let color = if active {
                     COLOR_WS_FOCUSED
                 } else {
