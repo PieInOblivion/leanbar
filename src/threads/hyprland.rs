@@ -78,18 +78,16 @@ fn set_workspace_empty(ws: u8) {
 }
 
 fn handle_event(event: &[u8], wake_fd: &OwnedFd) {
-    if let Some(pos) = event.windows(2).position(|w| w == b">>") {
-        let (name, data) = (&event[..pos], &event[pos + 2..]);
-        if let Some(ws) = parse_ws(data) {
-            match name {
-                b"workspace" => set_active_workspace(ws),
-                b"createworkspace" => set_workspace_occupied(ws),
-                b"destroyworkspace" => set_workspace_empty(ws),
-                _ => return,
-            };
-            ping_main_thread(wake_fd);
-        }
+    if let Some(ws) = event.strip_prefix(b"workspace>>").and_then(parse_ws) {
+        set_active_workspace(ws);
+    } else if let Some(ws) = event.strip_prefix(b"createworkspace>>").and_then(parse_ws) {
+        set_workspace_occupied(ws);
+    } else if let Some(ws) = event.strip_prefix(b"destroyworkspace>>").and_then(parse_ws) {
+        set_workspace_empty(ws);
+    } else {
+        return;
     }
+    ping_main_thread(wake_fd);
 }
 
 fn parse_ws(data: &[u8]) -> Option<u8> {
