@@ -2,7 +2,6 @@ use std::io::{BufRead, BufReader};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::{env, thread};
 
@@ -12,14 +11,10 @@ pub fn start(wake_fd: OwnedFd) {
     let _ = thread::Builder::new().spawn(move || {
         println!("[Hyprland Thread] Started");
 
-        // 1. Initialize current workspaces using `hyprctl`
-        init_workspaces();
-        ping_main_thread(&wake_fd);
-
-        // 2. Connect to the event socket
+        let runtime_dir = env::var("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR not set.");
         let his =
             env::var("HYPRLAND_INSTANCE_SIGNATURE").expect("HYPRLAND_INSTANCE_SIGNATURE not set.");
-        let runtime_dir = env::var("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR not set.");
+
         let socket_path = PathBuf::from(runtime_dir)
             .join("hypr")
             .join(his)
@@ -79,32 +74,6 @@ fn set_workspace_empty(ws: u8) {
         let (active, occupied) = unpack_workspaces(WORKSPACES_MASK.load(Ordering::Relaxed));
         let new_occupied = occupied & !(1 << (ws - 1));
         WORKSPACES_MASK.store(pack_workspaces(active, new_occupied), Ordering::Relaxed);
-    }
-}
-
-fn init_workspaces() {
-    // hyprctl activeworkspace
-    if let Ok(output) = Command::new("hyprctl").arg("activeworkspace").output() {
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        if let Some((_, remainder)) = out_str.split_once("workspace ID ") {
-            let ws_str = remainder.split_whitespace().next().unwrap_or("");
-            if let Ok(ws) = ws_str.parse::<u8>() {
-                set_active_workspace(ws);
-            }
-        }
-    }
-
-    // hyprctl workspaces
-    if let Ok(output) = Command::new("hyprctl").arg("workspaces").output() {
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        for line in out_str.lines() {
-            if let Some(remainder) = line.strip_prefix("workspace ID ") {
-                let ws_str = remainder.split_whitespace().next().unwrap_or("");
-                if let Ok(ws) = ws_str.parse::<u8>() {
-                    set_workspace_occupied(ws);
-                }
-            }
-        }
     }
 }
 

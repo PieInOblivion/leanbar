@@ -20,7 +20,7 @@ pub const COLOR_BAT: u32 = 0xffa6e3a1;
 use app_state::AppState;
 use error::LeanbarError;
 
-pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new(1 << 10); // bits 13..10: active_ws, bits 9..0: occupied mask
+pub static WORKSPACES_MASK: AtomicU16 = AtomicU16::new((1 << 10) | 1); // bits 13..10: active_ws, bits 9..0: occupied mask; default ws1 active+occupied
 pub static TIME_MASK: AtomicU16 = AtomicU16::new(0); // hours, minutes
 pub static DATE_MASK: AtomicU32 = AtomicU32::new(0); // day, month, year
 pub static BATTERY_MASK: AtomicU32 = AtomicU32::new(0); // percent, state, estimate_m (0 = No Battery; state: 0: Unknown, 1: Discharging, 2: Charging, 3: Full)
