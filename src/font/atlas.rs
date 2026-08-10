@@ -41,13 +41,9 @@ pub struct GlyphMetrics {
 }
 
 pub struct FontAtlas {
-    /// ONE single heap allocation containing all 19 concatenated coverage bitmaps.
     pub buffer: Box<[u8]>,
-    /// Metrics array indexed by GlyphId: [0..9, AM, PM, /, :, space, %, +, -, Full].
     pub glyphs: [GlyphMetrics; GLYPH_COUNT],
-    /// Fast lookup array for digit pixel widths (0..=9).
     pub digit_widths: [usize; 10],
-    /// Precalculated max slot widths loaded directly from the binary file header.
     pub date_slot_max_width: usize,
     pub clock_slot_max_width: usize,
 }
