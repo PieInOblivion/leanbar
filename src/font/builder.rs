@@ -2,10 +2,10 @@ use fontdue::{Font, FontSettings};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::process::Command;
 
-use super::atlas::{ATLAS_MAGIC, FontAtlas, GLYPH_COUNT, GlyphMetrics, font_mtime};
 use crate::error::LeanbarError;
+use crate::font::FontAtlas;
+use crate::font::atlas::{ATLAS_MAGIC, GLYPH_COUNT, GlyphMetrics, font_mtime};
 
 #[derive(Default)]
 struct RasterizedGlyph {
@@ -28,32 +28,6 @@ pub fn run_builder_mode(args: &mut impl Iterator<Item = String>) -> Result<(), L
 
     let cache = from_font(&font_path, size)?;
     write_atlas(&cache, &font_path, size, Path::new(&atlas_path))?;
-    Ok(())
-}
-
-pub fn build_atlas_with_helper(
-    font_path: &str,
-    size: f32,
-    atlas_path: &Path,
-) -> Result<(), LeanbarError> {
-    if let Some(parent) = atlas_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let exe = std::env::current_exe()?;
-    let status = Command::new(exe)
-        .arg("--build-font-atlas")
-        .arg(font_path)
-        .arg(format!("{size:.2}"))
-        .arg(atlas_path)
-        .status()?;
-
-    if !status.success() {
-        return Err(LeanbarError::Atlas(
-            "font atlas helper process failed".into(),
-        ));
-    }
-
     Ok(())
 }
 

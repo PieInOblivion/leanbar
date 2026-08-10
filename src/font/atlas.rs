@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::UNIX_EPOCH;
 use std::{env, fs};
 
@@ -54,12 +55,32 @@ pub struct FontAtlas {
 impl FontAtlas {
     pub fn load_or_build(font_path: &str, size: f32) -> Result<Self, LeanbarError> {
         let atlas_path = atlas_cache_path(font_path, size)?;
+
         if let Ok(cache) = Self::load_from_atlas(font_path, size, &atlas_path) {
             println!("[FontAtlas] cache hit: {}", atlas_path.display());
             return Ok(cache);
         }
+
         println!("[FontAtlas] cache miss: rebuilding");
-        super::builder::build_atlas_with_helper(font_path, size, &atlas_path)?;
+
+        if let Some(parent) = &atlas_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let exe = std::env::current_exe()?;
+        let status = Command::new(exe)
+            .arg("--build-font-atlas")
+            .arg(font_path)
+            .arg(format!("{size:.2}"))
+            .arg(&atlas_path)
+            .status()?;
+
+        if !status.success() {
+            return Err(LeanbarError::Atlas(
+                "font atlas helper process failed".into(),
+            ));
+        }
+
         Self::load_from_atlas(font_path, size, &atlas_path)
     }
 
