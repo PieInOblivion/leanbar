@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::error::LeanbarError;
 use crate::font::FontAtlas;
-use crate::font::atlas::{ATLAS_MAGIC, GLYPH_COUNT, GlyphMetrics, font_mtime};
+use crate::font::atlas::{ATLAS_MAGIC, GlyphMetrics, font_mtime};
 
 #[derive(Default)]
 struct RasterizedGlyph {
@@ -70,19 +70,16 @@ fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
     ];
 
     let mut buffer_vec = Vec::new();
-    let mut glyphs = [GlyphMetrics::default(); GLYPH_COUNT];
 
-    for (i, raw) in raw_glyphs.iter().enumerate() {
-        let offset = buffer_vec.len();
-        let len = raw.coverage.len();
-        buffer_vec.extend_from_slice(&raw.coverage);
-        glyphs[i] = GlyphMetrics {
-            offset,
-            len,
-            width: raw.width,
-            height: raw.height,
-        };
-    }
+    let glyphs = std::array::from_fn(|i| {
+        buffer_vec.extend_from_slice(&raw_glyphs[i].coverage);
+        GlyphMetrics {
+            offset: buffer_vec.len(),
+            len: raw_glyphs[i].coverage.len(),
+            width: raw_glyphs[i].width,
+            height: raw_glyphs[i].height,
+        }
+    });
 
     let digit_widths = std::array::from_fn(|i| glyphs[i].width);
     let max_digit_width = digit_widths.iter().copied().max().unwrap_or(0);
