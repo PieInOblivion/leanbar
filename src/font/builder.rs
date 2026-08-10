@@ -95,7 +95,7 @@ fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
         &raw_full,
     ];
 
-    let mut buffer_vec = Vec::with_capacity(4096);
+    let mut buffer_vec = Vec::new();
     let mut glyphs = [GlyphMetrics::default(); GLYPH_COUNT];
 
     for (i, raw) in raw_glyphs.iter().enumerate() {
