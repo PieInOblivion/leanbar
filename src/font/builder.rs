@@ -72,16 +72,17 @@ fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
     let mut buffer_vec = Vec::new();
 
     let glyphs = std::array::from_fn(|i| {
+        let offset = buffer_vec.len();
         buffer_vec.extend_from_slice(&raw_glyphs[i].coverage);
         GlyphMetrics {
-            offset: buffer_vec.len(),
+            offset,
             len: raw_glyphs[i].coverage.len(),
             width: raw_glyphs[i].width,
             height: raw_glyphs[i].height,
         }
     });
 
-    let digit_widths = std::array::from_fn(|i| glyphs[i].width);
+    let digit_widths: [usize; 10] = std::array::from_fn(|i| glyphs[i].width);
     let max_digit_width = digit_widths.iter().copied().max().unwrap_or(0);
     let max_ampm_width = glyphs[10].width.max(glyphs[11].width);
 

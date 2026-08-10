@@ -122,10 +122,9 @@ impl FontAtlas {
             };
         }
 
-        // ONE single heap allocation for all coverage bitmaps
         let buffer = take(&mut cursor, payload_size)?.into();
 
-        let digit_widths = std::array::from_fn(|i| glyphs[i].width);
+        let digit_widths: [usize; 10] = std::array::from_fn(|i| glyphs[i].width);
 
         Ok(FontAtlas {
             buffer,
