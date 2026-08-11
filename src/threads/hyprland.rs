@@ -30,23 +30,14 @@ pub fn start(wake_fd: OwnedFd) {
 
         println!("[Hyprland Thread] Connected to IPC socket.");
 
-        // if the OS splits a line across two reads, we'll drop the first chunk
-        // and miss that event. unlikely in practice since our events are ~40 bytes
-        // and the buffer is 512, but not impossible. fix would be a small stack
-        // accumulator to hold partial lines between fills.
-        let mut reader = BufReader::with_capacity(512, stream);
+        let mut reader = BufReader::with_capacity(384, stream);
+        let mut buf = Vec::with_capacity(128);
 
-        while let Ok(buf) = reader.fill_buf() {
-            if buf.is_empty() {
-                break;
-            }
-            if let Some(i) = buf.iter().position(|&b| b == b'\n') {
-                handle_event(&buf[..i], &wake_fd);
-                reader.consume(i + 1);
-            } else {
-                let len = buf.len();
-                reader.consume(len);
-            }
+        while let Ok(n) = reader.read_until(b'\n', &mut buf)
+            && n != 0
+        {
+            handle_event(&buf, &wake_fd);
+            buf.clear();
         }
 
         println!("[Hyprland Thread] Connection closed.");
@@ -92,8 +83,8 @@ fn handle_event(event: &[u8], wake_fd: &OwnedFd) {
 
 fn parse_ws(data: &[u8]) -> Option<u8> {
     match data {
-        [b @ b'1'..=b'9'] => Some(b - b'0'),
-        [b'1', b'0'] => Some(10),
+        [b @ b'1'..=b'9', b'\n'] => Some(b - b'0'),
+        [b'1', b'0', b'\n'] => Some(10),
         _ => None,
     }
 }
