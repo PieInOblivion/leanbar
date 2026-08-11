@@ -44,11 +44,11 @@ pub fn start(wake_fd: OwnedFd) {
             }
 
             // 2. Read battery every 30 ticks, but skip entirely if BATTERY_MASK is 0 (No Battery)
-            if tick_counter.is_multiple_of(30) && BATTERY_MASK.load(Ordering::Relaxed) != 0 {
-                tick_counter = 0;
-                if update_battery_state() {
-                    changed = true;
-                }
+            if tick_counter.is_multiple_of(30)
+                && BATTERY_MASK.load(Ordering::Relaxed) != 0
+                && update_battery_state()
+            {
+                changed = true;
             }
 
             // Only wake up the main thread if the time, date, or battery actually changed
