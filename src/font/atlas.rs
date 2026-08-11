@@ -35,7 +35,6 @@ pub enum GlyphId {
 #[derive(Clone, Copy, Default)]
 pub struct GlyphMetrics {
     pub offset: usize,
-    pub len: usize,
     pub width: usize,
     pub height: usize,
 }
@@ -116,7 +115,6 @@ impl FontAtlas {
         for glyph in &mut glyphs {
             *glyph = GlyphMetrics {
                 offset: take_usize(&mut cursor)?,
-                len: take_usize(&mut cursor)?,
                 width: take_usize(&mut cursor)?,
                 height: take_usize(&mut cursor)?,
             };
@@ -140,7 +138,7 @@ impl FontAtlas {
     }
 
     pub fn coverage(&self, glyph: &GlyphMetrics) -> &[u8] {
-        &self.buffer[glyph.offset..glyph.offset + glyph.len]
+        &self.buffer[glyph.offset..glyph.offset + glyph.width * glyph.height]
     }
 
     /// Decompose a number into digits once on the stack (up to 4 digits).

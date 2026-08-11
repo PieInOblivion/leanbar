@@ -76,7 +76,6 @@ fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
         buffer_vec.extend_from_slice(&raw_glyphs[i].coverage);
         GlyphMetrics {
             offset,
-            len: raw_glyphs[i].coverage.len(),
             width: raw_glyphs[i].width,
             height: raw_glyphs[i].height,
         }
@@ -130,7 +129,6 @@ fn write_atlas(
 
     for g in &cache.glyphs {
         writer.write_all(&g.offset.to_le_bytes())?;
-        writer.write_all(&g.len.to_le_bytes())?;
         writer.write_all(&g.width.to_le_bytes())?;
         writer.write_all(&g.height.to_le_bytes())?;
     }
