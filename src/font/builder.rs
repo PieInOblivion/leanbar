@@ -33,7 +33,7 @@ pub fn run_builder_mode(args: &mut impl Iterator<Item = String>) -> Result<(), L
 
 fn from_font(font_path: &str, size: f32) -> Result<FontAtlas, LeanbarError> {
     let font = Font::from_bytes(fs::read(font_path)?, FontSettings::default())
-        .map_err(|e| LeanbarError::Atlas(e.to_string()))?;
+        .map_err(|e| LeanbarError::Atlas(e.into()))?;
 
     let raw_numbers: [RasterizedGlyph; 10] =
         std::array::from_fn(|i| rasterize_char(&font, (b'0' + i as u8) as char, size));
